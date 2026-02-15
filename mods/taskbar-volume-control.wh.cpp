@@ -65,7 +65,7 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
   $name: No automatic mute toggle
   $description: >-
     For the Windows 11 indicator, this option causes volume scrolling to be
-    disabled when the volume is muted. For the None control indicator: By
+    disabled when the volume is muted. For the other control indicators: By
     default, the output device is muted once the volume reaches zero, and is
     unmuted on any change to a non-zero volume. Enabling this option turns off
     this functionality, such that the device mute status is not changed.
@@ -1796,7 +1796,8 @@ BOOL Wh_ModInit() {
     }
 
     if (g_target == Target::ShellExperienceHost || g_target == Target::SndVol) {
-        if (g_settings.volumeChangeStep == 2) {
+        if (g_settings.volumeChangeStep == 2 &&
+            !g_settings.noAutomaticMuteToggle) {
             return FALSE;
         }
 
@@ -1938,7 +1939,8 @@ BOOL Wh_ModSettingsChanged(BOOL* bReload) {
     LoadSettings();
 
     if (g_target == Target::ShellExperienceHost || g_target == Target::SndVol) {
-        if (g_settings.volumeChangeStep == 2) {
+        if (g_settings.volumeChangeStep == 2 &&
+            !g_settings.noAutomaticMuteToggle) {
             return FALSE;
         }
 
