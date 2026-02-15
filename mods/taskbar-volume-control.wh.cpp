@@ -33,6 +33,17 @@ relevant
 issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt-trigger-mouse-wheel-options).
 
 ![Demonstration](https://i.imgur.com/B6mtUj9.gif)
+
+## Related mods
+
+* For per-app volume control, check out the [Taskbar Volume Control
+  Per-App](https://windhawk.net/mods/taskbar-volume-control-per-app) mod.
+* For showing the volume control on the monitor where the mouse cursor is
+  located, or on a custom monitor of choice, check out the [Volume Control open
+  location](https://windhawk.net/mods/volume-control-open-location) mod.
+* For additional actions that can be triggered by scrolling over the taskbar,
+  check out the [Taskbar Scroll
+  Actions](https://windhawk.net/mods/taskbar-scroll-actions) mod.
 */
 // ==/WindhawkModReadme==
 
