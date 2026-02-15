@@ -617,18 +617,26 @@ bool Win11IndicatorAdjustVolumeLevelWithMouseWheel(short delta) {
     int clicks = delta / WHEEL_DELTA;
     Wh_Log(L"%d clicks (delta=%d)", clicks, delta);
 
-    SHORT appCommand = APPCOMMAND_VOLUME_UP;
-    if (clicks < 0) {
-        clicks = -clicks;
-        appCommand = APPCOMMAND_VOLUME_DOWN;
-    }
+    if (clicks) {
+        SHORT appCommand = APPCOMMAND_VOLUME_UP;
+        if (clicks < 0) {
+            clicks = -clicks;
+            appCommand = APPCOMMAND_VOLUME_DOWN;
+        }
 
-    if (g_settings.volumeChangeStep) {
-        clicks *= g_settings.volumeChangeStep / 2;
-    }
+        if (g_settings.volumeChangeStep) {
+            clicks *= g_settings.volumeChangeStep / 2;
+        }
 
-    if (!PostAppCommand(appCommand, clicks)) {
-        return false;
+        if (clicks > 1) {
+            AddMasterVolumeLevelScalar(
+                (appCommand == APPCOMMAND_VOLUME_UP ? 0.02f : -0.02f) *
+                (float)(clicks - 1));
+        }
+
+        if (!PostAppCommand(appCommand, 1)) {
+            return false;
+        }
     }
 
     g_lastScrollTime = GetTickCount();
