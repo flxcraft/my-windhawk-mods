@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              taskbar-volume-control
 // @name            Taskbar Volume Control
-// @description     Control the system volume by scrolling over the taskbar
+// @description     Control the system volume by scrolling over the taskbar or anywhere with modifier keys
 // @version         1.2.2
 // @author          m417z
 // @github          https://github.com/m417z
@@ -26,6 +26,18 @@
 # Taskbar Volume Control
 
 Control the system volume by scrolling over the taskbar.
+
+Features:
+
+* **Volume indicator**: Choose between Windows 11, Windows 10, Windows 7, or no
+  indicator.
+* **Scroll area**: Limit scrolling to the full taskbar, the tray area, or define
+  custom regions along the taskbar (e.g. 80%-100%).
+* **Scroll anywhere**: Hold a configurable combination of modifier keys
+  (Shift/Ctrl/Alt/Win) to control the volume by scrolling anywhere on screen.
+* **Full screen scrolling**: Scroll at the taskbar position to control the
+  volume even when a full screen window covers the taskbar.
+* **Middle click to mute**: Middle click the volume tray icon to toggle mute.
 
 **Note:** Some laptop touchpads might not support scrolling over the taskbar. A
 workaround is to use the "pinch to zoom" gesture. For details, check out [a
