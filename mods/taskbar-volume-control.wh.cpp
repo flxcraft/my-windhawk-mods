@@ -72,6 +72,17 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
   $description: >-
     When enabled, holding the Ctrl key and scrolling the mouse wheel will change
     the system volume.
+- scrollAnywhereKeys:
+  - Shift: false
+  - Ctrl: false
+  - Alt: false
+  - Win: false
+  $name: Scroll anywhere modifier keys
+  $description: >-
+    A combination of modifier keys that, when held, allow controlling the system
+    volume by scrolling the mouse wheel anywhere on screen. Note that scrolling
+    won't work when the foreground window is of an elevated process (such as
+    Windhawk or Task Manager).
 - noAutomaticMuteToggle: false
   $name: No automatic mute toggle
   $description: >-
@@ -125,6 +136,12 @@ struct {
     ScrollArea scrollArea;
     bool middleClickToMute;
     bool ctrlScrollVolumeChange;
+    struct {
+        bool shift;
+        bool ctrl;
+        bool alt;
+        bool win;
+    } scrollAnywhereKeys;
     bool noAutomaticMuteToggle;
     int volumeChangeStep;
     bool oldTaskbarOnWin11;
@@ -142,6 +159,10 @@ std::atomic<bool> g_taskbarViewDllLoaded;
 std::atomic<bool> g_initialized;
 bool g_inputSiteProcHooked;
 std::unordered_set<HWND> g_secondaryTaskbarWindows;
+
+UINT g_scrollAnywhereMsg =
+    RegisterWindowMessage(L"Windhawk_ScrollAnywhere_" WH_MOD_ID);
+HANDLE g_scrollAnywhereThread;
 
 enum {
     WIN_VERSION_UNSUPPORTED = 0,
@@ -1379,7 +1400,12 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(_In_ HWND hWnd,
             break;
 
         default:
-            result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            if (uMsg == g_scrollAnywhereMsg) {
+                OpenScrollSndVol(wParam, lParam);
+                result = 0;
+            } else {
+                result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
+            }
             break;
     }
 
@@ -1652,6 +1678,14 @@ void LoadSettings() {
     g_settings.middleClickToMute = Wh_GetIntSetting(L"middleClickToMute");
     g_settings.ctrlScrollVolumeChange =
         Wh_GetIntSetting(L"ctrlScrollVolumeChange");
+    g_settings.scrollAnywhereKeys.shift =
+        Wh_GetIntSetting(L"scrollAnywhereKeys.Shift");
+    g_settings.scrollAnywhereKeys.ctrl =
+        Wh_GetIntSetting(L"scrollAnywhereKeys.Ctrl");
+    g_settings.scrollAnywhereKeys.alt =
+        Wh_GetIntSetting(L"scrollAnywhereKeys.Alt");
+    g_settings.scrollAnywhereKeys.win =
+        Wh_GetIntSetting(L"scrollAnywhereKeys.Win");
     g_settings.noAutomaticMuteToggle =
         Wh_GetIntSetting(L"noAutomaticMuteToggle");
     g_settings.volumeChangeStep = Wh_GetIntSetting(L"volumeChangeStep");
@@ -1778,6 +1812,103 @@ HMODULE WINAPI LoadLibraryExW_Hook(LPCWSTR lpLibFileName,
     }
 
     return module;
+}
+
+bool IsScrollAnywhereEnabled() {
+    return g_settings.scrollAnywhereKeys.shift ||
+           g_settings.scrollAnywhereKeys.ctrl ||
+           g_settings.scrollAnywhereKeys.alt ||
+           g_settings.scrollAnywhereKeys.win;
+}
+
+bool AreScrollAnywhereModifiersHeld() {
+    bool shiftKeyState = GetAsyncKeyState(VK_SHIFT) < 0;
+    bool ctrlKeyState = GetAsyncKeyState(VK_CONTROL) < 0;
+    bool altKeyState = GetAsyncKeyState(VK_MENU) < 0;
+    bool winKeyState =
+        (GetAsyncKeyState(VK_LWIN) < 0) || (GetAsyncKeyState(VK_RWIN) < 0);
+
+    return g_settings.scrollAnywhereKeys.shift == shiftKeyState &&
+           g_settings.scrollAnywhereKeys.ctrl == ctrlKeyState &&
+           g_settings.scrollAnywhereKeys.alt == altKeyState &&
+           g_settings.scrollAnywhereKeys.win == winKeyState;
+}
+
+LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION && wParam == WM_MOUSEWHEEL &&
+        AreScrollAnywhereModifiersHeld()) {
+        MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+        HWND hTaskbarWnd = g_hTaskbarWnd;
+        if (hTaskbarWnd) {
+            PostMessage(hTaskbarWnd, g_scrollAnywhereMsg,
+                        MAKEWPARAM(0, HIWORD(pMouseStruct->mouseData)),
+                        MAKELPARAM(pMouseStruct->pt.x, pMouseStruct->pt.y));
+        }
+
+        return 1;
+    }
+
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+DWORD WINAPI ScrollAnywhereThread(LPVOID lpParameter) {
+    HANDLE hReadyEvent = (HANDLE)lpParameter;
+
+    HHOOK hook = SetWindowsHookEx(WH_MOUSE_LL, LowLevelMouseProc, nullptr, 0);
+
+    SetEvent(hReadyEvent);
+
+    if (!hook) {
+        Wh_Log(L"SetWindowsHookEx failed: %u", GetLastError());
+        return 1;
+    }
+
+    BOOL bRet;
+    MSG msg;
+    while ((bRet = GetMessage(&msg, nullptr, 0, 0)) != 0) {
+        if (bRet == -1) {
+            break;
+        }
+
+        if (msg.hwnd == nullptr && msg.message == WM_APP) {
+            PostQuitMessage(0);
+            continue;
+        }
+
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    UnhookWindowsHookEx(hook);
+    return 0;
+}
+
+void ScrollAnywhereThreadInit() {
+    if (g_scrollAnywhereThread) {
+        return;
+    }
+
+    HANDLE hReadyEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    if (!hReadyEvent) {
+        return;
+    }
+
+    g_scrollAnywhereThread =
+        CreateThread(nullptr, 0, ScrollAnywhereThread, hReadyEvent, 0, nullptr);
+    if (g_scrollAnywhereThread) {
+        WaitForSingleObject(hReadyEvent, INFINITE);
+    }
+
+    CloseHandle(hReadyEvent);
+}
+
+void ScrollAnywhereThreadUninit() {
+    if (g_scrollAnywhereThread) {
+        PostThreadMessage(GetThreadId(g_scrollAnywhereThread), WM_APP, 0, 0);
+        WaitForSingleObject(g_scrollAnywhereThread, INFINITE);
+        CloseHandle(g_scrollAnywhereThread);
+        g_scrollAnywhereThread = nullptr;
+    }
 }
 
 BOOL Wh_ModInit() {
@@ -1928,6 +2059,10 @@ void Wh_ModAfterInit() {
             HandleIdentifiedTaskbarWindow(hWnd);
         }
     }
+
+    if (IsScrollAnywhereEnabled()) {
+        ScrollAnywhereThreadInit();
+    }
 }
 
 void Wh_ModUninit() {
@@ -1936,6 +2071,8 @@ void Wh_ModUninit() {
     if (g_target != Target::Explorer) {
         return;
     }
+
+    ScrollAnywhereThreadUninit();
 
     if (g_hTaskbarWnd) {
         UnsubclassTaskbarWindow(g_hTaskbarWnd);
@@ -1985,6 +2122,13 @@ BOOL Wh_ModSettingsChanged(BOOL* bReload) {
 
     *bReload = g_settings.oldTaskbarOnWin11 != prevOldTaskbarOnWin11 ||
                g_settings.middleClickToMute != prevMiddleClickToMute;
+    if (!*bReload) {
+        if (IsScrollAnywhereEnabled()) {
+            ScrollAnywhereThreadInit();
+        } else {
+            ScrollAnywhereThreadUninit();
+        }
+    }
 
     return TRUE;
 }
