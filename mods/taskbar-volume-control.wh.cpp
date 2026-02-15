@@ -83,6 +83,15 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
     volume by scrolling the mouse wheel anywhere on screen. Note that scrolling
     won't work when the foreground window is of an elevated process (such as
     Windhawk or Task Manager).
+- fullScreenScrolling: disabled
+  $name: Full screen scrolling
+  $description: >-
+    Scroll at the taskbar position to control the system volume, even when the
+    taskbar is covered by a full screen window.
+  $options:
+  - disabled: Disabled
+  - withIndicator: Enabled with indicator
+  - withoutIndicator: Enabled without indicator
 - noAutomaticMuteToggle: false
   $name: No automatic mute toggle
   $description: >-
@@ -131,6 +140,12 @@ enum class ScrollArea {
     taskbarWithoutNotificationArea,
 };
 
+enum class FullScreenScrolling {
+    disabled,
+    withIndicator,
+    withoutIndicator,
+};
+
 struct {
     VolumeIndicator volumeIndicator;
     ScrollArea scrollArea;
@@ -142,6 +157,7 @@ struct {
         bool alt;
         bool win;
     } scrollAnywhereKeys;
+    FullScreenScrolling fullScreenScrolling;
     bool noAutomaticMuteToggle;
     int volumeChangeStep;
     bool oldTaskbarOnWin11;
@@ -1401,7 +1417,12 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(_In_ HWND hWnd,
 
         default:
             if (uMsg == g_scrollAnywhereMsg) {
-                OpenScrollSndVol(wParam, lParam);
+                if (LOWORD(wParam) == 1) {
+                    AdjustVolumeLevelWithMouseWheel(
+                        GET_WHEEL_DELTA_WPARAM(wParam), 0);
+                } else {
+                    OpenScrollSndVol(wParam, lParam);
+                }
                 result = 0;
             } else {
                 result = DefSubclassProc(hWnd, uMsg, wParam, lParam);
@@ -1686,6 +1707,16 @@ void LoadSettings() {
         Wh_GetIntSetting(L"scrollAnywhereKeys.Alt");
     g_settings.scrollAnywhereKeys.win =
         Wh_GetIntSetting(L"scrollAnywhereKeys.Win");
+
+    PCWSTR fullScreenScrolling = Wh_GetStringSetting(L"fullScreenScrolling");
+    g_settings.fullScreenScrolling = FullScreenScrolling::disabled;
+    if (wcscmp(fullScreenScrolling, L"withIndicator") == 0) {
+        g_settings.fullScreenScrolling = FullScreenScrolling::withIndicator;
+    } else if (wcscmp(fullScreenScrolling, L"withoutIndicator") == 0) {
+        g_settings.fullScreenScrolling = FullScreenScrolling::withoutIndicator;
+    }
+    Wh_FreeStringSetting(fullScreenScrolling);
+
     g_settings.noAutomaticMuteToggle =
         Wh_GetIntSetting(L"noAutomaticMuteToggle");
     g_settings.volumeChangeStep = Wh_GetIntSetting(L"volumeChangeStep");
@@ -1821,6 +1852,11 @@ bool IsScrollAnywhereEnabled() {
            g_settings.scrollAnywhereKeys.win;
 }
 
+bool IsMouseHookNeeded() {
+    return IsScrollAnywhereEnabled() ||
+           g_settings.fullScreenScrolling != FullScreenScrolling::disabled;
+}
+
 bool AreScrollAnywhereModifiersHeld() {
     bool shiftKeyState = GetAsyncKeyState(VK_SHIFT) < 0;
     bool ctrlKeyState = GetAsyncKeyState(VK_CONTROL) < 0;
@@ -1835,17 +1871,82 @@ bool AreScrollAnywhereModifiersHeld() {
 }
 
 LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
-    if (nCode == HC_ACTION && wParam == WM_MOUSEWHEEL &&
-        AreScrollAnywhereModifiersHeld()) {
-        MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
-        HWND hTaskbarWnd = g_hTaskbarWnd;
-        if (hTaskbarWnd) {
-            PostMessage(hTaskbarWnd, g_scrollAnywhereMsg,
-                        MAKEWPARAM(0, HIWORD(pMouseStruct->mouseData)),
-                        MAKELPARAM(pMouseStruct->pt.x, pMouseStruct->pt.y));
+    if (nCode != HC_ACTION || wParam != WM_MOUSEWHEEL) {
+        return CallNextHookEx(nullptr, nCode, wParam, lParam);
+    }
+
+    HWND hTaskbarWnd = g_hTaskbarWnd;
+    if (!hTaskbarWnd) {
+        return CallNextHookEx(nullptr, nCode, wParam, lParam);
+    }
+
+    MSLLHOOKSTRUCT* pMouseStruct = (MSLLHOOKSTRUCT*)lParam;
+
+    // Scroll anywhere: modifier keys held.
+    if (IsScrollAnywhereEnabled() && AreScrollAnywhereModifiersHeld()) {
+        PostMessage(hTaskbarWnd, g_scrollAnywhereMsg,
+                    MAKEWPARAM(0, HIWORD(pMouseStruct->mouseData)),
+                    MAKELPARAM(pMouseStruct->pt.x, pMouseStruct->pt.y));
+        return 1;
+    }
+
+    // Full screen scrolling: cursor in taskbar region but taskbar not visible.
+    if (g_settings.fullScreenScrolling != FullScreenScrolling::disabled) {
+        POINT pt = pMouseStruct->pt;
+
+        HWND hPointWnd = WindowFromPoint(pt);
+        if (hPointWnd) {
+            HWND hRootWnd = GetAncestor(hPointWnd, GA_ROOT);
+            if (hRootWnd && IsTaskbarWindow(hRootWnd)) {
+                return CallNextHookEx(nullptr, nCode, wParam, lParam);
+            }
         }
 
-        return 1;
+        bool isInTaskbarRegion = false;
+
+        RECT rc;
+        if (GetWindowRect(hTaskbarWnd, &rc) && PtInRect(&rc, pt)) {
+            isInTaskbarRegion = true;
+        }
+
+        if (!isInTaskbarRegion) {
+            DWORD dwTaskbarThreadId = g_dwTaskbarThreadId;
+            if (dwTaskbarThreadId) {
+                // EnumThreadWindows returns FALSE if the callback returned
+                // FALSE, i.e. a match was found.
+                if (!EnumThreadWindows(
+                        dwTaskbarThreadId,
+                        [](HWND hWnd, LPARAM lParam)
+                            WINAPI_LAMBDA_RETURN(BOOL) {
+                                WCHAR szClassName[32];
+                                if (GetClassName(hWnd, szClassName,
+                                                 ARRAYSIZE(szClassName)) &&
+                                    _wcsicmp(szClassName,
+                                             L"Shell_SecondaryTrayWnd") == 0) {
+                                    RECT rc;
+                                    if (GetWindowRect(hWnd, &rc) &&
+                                        PtInRect(&rc, *(POINT*)lParam)) {
+                                        return FALSE;
+                                    }
+                                }
+                                return TRUE;
+                            },
+                        (LPARAM)&pt)) {
+                    isInTaskbarRegion = true;
+                }
+            }
+        }
+
+        if (isInTaskbarRegion) {
+            WORD mode = (g_settings.fullScreenScrolling ==
+                         FullScreenScrolling::withoutIndicator)
+                            ? 1
+                            : 0;
+            PostMessage(hTaskbarWnd, g_scrollAnywhereMsg,
+                        MAKEWPARAM(mode, HIWORD(pMouseStruct->mouseData)),
+                        MAKELPARAM(pt.x, pt.y));
+            return 1;
+        }
     }
 
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
@@ -2060,7 +2161,7 @@ void Wh_ModAfterInit() {
         }
     }
 
-    if (IsScrollAnywhereEnabled()) {
+    if (IsMouseHookNeeded()) {
         ScrollAnywhereThreadInit();
     }
 }
@@ -2123,7 +2224,7 @@ BOOL Wh_ModSettingsChanged(BOOL* bReload) {
     *bReload = g_settings.oldTaskbarOnWin11 != prevOldTaskbarOnWin11 ||
                g_settings.middleClickToMute != prevMiddleClickToMute;
     if (!*bReload) {
-        if (IsScrollAnywhereEnabled()) {
+        if (IsMouseHookNeeded()) {
             ScrollAnywhereThreadInit();
         } else {
             ScrollAnywhereThreadUninit();
