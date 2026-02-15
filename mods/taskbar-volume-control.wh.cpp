@@ -9,6 +9,7 @@
 // @homepage        https://m417z.com/
 // @include         explorer.exe
 // @include         ShellExperienceHost.exe
+// @include         SndVol.exe
 // @compilerOptions -DWINVER=0x0A00 -lcomctl32 -ldwmapi -lgdi32 -lole32 -lversion
 // ==/WindhawkMod==
 
@@ -72,9 +73,8 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
   $name: Volume change step
   $description: >-
     Allows to configure the volume change that will occur with each notch of
-    mouse wheel movement. This option has effect only for the Windows 11,
-    Windows 10, and None control indicators. For the Windows 11 indicator, must
-    be a multiple of 2.
+    mouse wheel movement. For the Windows 11 indicator, must be a multiple of
+    2.
 - oldTaskbarOnWin11: false
   $name: Customize the old taskbar on Windows 11
   $description: >-
@@ -122,6 +122,7 @@ struct {
 enum class Target {
     Explorer,
     ShellExperienceHost,
+    SndVol,
 };
 
 Target g_target;
@@ -641,7 +642,6 @@ bool Win11IndicatorAdjustVolumeLevelWithMouseWheel(short delta) {
 #pragma region sndvol
 
 BOOL OpenScrollSndVol(WPARAM wParam, LPARAM lMousePosParam);
-BOOL ScrollSndVol(WPARAM wParam, LPARAM lMousePosParam);
 void SetSndVolTimer();
 void KillSndVolTimer();
 void CleanupSndVol();
@@ -711,28 +711,30 @@ BOOL OpenScrollSndVol(WPARAM wParam, LPARAM lMousePosParam) {
     if (!IsDefaultAudioEndpointAvailable())
         return FALSE;
 
+    if (!AdjustVolumeLevelWithMouseWheel(GET_WHEEL_DELTA_WPARAM(wParam), 0))
+        return FALSE;
+
     if (ValidateSndVolProcess()) {
-        if (WaitForInputIdle(hSndVolProcess, 0) == 0)  // If not initializing
-        {
+        // If not initializing
+        if (WaitForInputIdle(hSndVolProcess, 0) == 0) {
             if (ValidateSndVolWnd()) {
-                ScrollSndVol(wParam, lMousePosParam);
+                // False because we didn't open it, it was open
+                return FALSE;
+            }
 
-                return FALSE;  // False because we didn't open it, it was open
-            } else {
-                hVolumeAppWnd = FindWindow(L"Windows Volume App Window",
-                                           L"Windows Volume App Window");
-                if (hVolumeAppWnd) {
-                    GetWindowThreadProcessId(hVolumeAppWnd, &dwProcessId);
+            hVolumeAppWnd = FindWindow(L"Windows Volume App Window",
+                                       L"Windows Volume App Window");
+            if (hVolumeAppWnd) {
+                GetWindowThreadProcessId(hVolumeAppWnd, &dwProcessId);
 
-                    if (GetProcessId(hSndVolProcess) == dwProcessId) {
-                        BOOL bOpened;
-                        if (OpenScrollSndVolInternal(wParam, lMousePosParam,
-                                                     hVolumeAppWnd, &bOpened)) {
-                            if (bOpened)
-                                SetSndVolTimer();
+                if (GetProcessId(hSndVolProcess) == dwProcessId) {
+                    BOOL bOpened;
+                    if (OpenScrollSndVolInternal(wParam, lMousePosParam,
+                                                 hVolumeAppWnd, &bOpened)) {
+                        if (bOpened)
+                            SetSndVolTimer();
 
-                            return bOpened;
-                        }
+                        return bOpened;
                     }
                 }
             }
@@ -754,23 +756,20 @@ BOOL OpenScrollSndVol(WPARAM wParam, LPARAM lMousePosParam) {
                 OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
                             FALSE, dwProcessId);
             if (hSndVolProcess) {
-                if (WaitForInputIdle(hSndVolProcess, 0) ==
-                    0)  // if not initializing
-                {
+                // if not initializing
+                if (WaitForInputIdle(hSndVolProcess, 0) == 0) {
                     if (ValidateSndVolWnd()) {
-                        ScrollSndVol(wParam, lMousePosParam);
+                        // False because we didn't open it, it was open
+                        return FALSE;
+                    }
 
-                        return FALSE;  // False because we didn't open it, it
-                                       // was open
-                    } else {
-                        BOOL bOpened;
-                        if (OpenScrollSndVolInternal(wParam, lMousePosParam,
-                                                     hVolumeAppWnd, &bOpened)) {
-                            if (bOpened)
-                                SetSndVolTimer();
+                    BOOL bOpened;
+                    if (OpenScrollSndVolInternal(wParam, lMousePosParam,
+                                                 hVolumeAppWnd, &bOpened)) {
+                        if (bOpened)
+                            SetSndVolTimer();
 
-                            return bOpened;
-                        }
+                        return bOpened;
                     }
                 }
             }
@@ -800,19 +799,6 @@ BOOL OpenScrollSndVol(WPARAM wParam, LPARAM lMousePosParam) {
 
     SetSndVolTimer();
 
-    return TRUE;
-}
-
-BOOL ScrollSndVol(WPARAM wParam, LPARAM lMousePosParam) {
-    GUITHREADINFO guithreadinfo;
-
-    guithreadinfo.cbSize = sizeof(GUITHREADINFO);
-
-    if (!GetGUIThreadInfo(GetWindowThreadProcessId(hSndVolWnd, NULL),
-                          &guithreadinfo))
-        return FALSE;
-
-    PostMessage(guithreadinfo.hwndFocus, WM_MOUSEWHEEL, wParam, lMousePosParam);
     return TRUE;
 }
 
@@ -1800,6 +1786,8 @@ BOOL Wh_ModInit() {
                 moduleFileName++;
                 if (_wcsicmp(moduleFileName, L"ShellExperienceHost.exe") == 0) {
                     g_target = Target::ShellExperienceHost;
+                } else if (_wcsicmp(moduleFileName, L"SndVol.exe") == 0) {
+                    g_target = Target::SndVol;
                 }
             } else {
                 Wh_Log(L"GetModuleFileName returned an unsupported path");
@@ -1807,11 +1795,26 @@ BOOL Wh_ModInit() {
             break;
     }
 
-    if (g_target == Target::ShellExperienceHost) {
-        if (!CanUseModernIndicator() ||
-            g_settings.volumeIndicator != VolumeIndicator::Modern ||
-            g_settings.volumeChangeStep == 2) {
+    if (g_target == Target::ShellExperienceHost || g_target == Target::SndVol) {
+        if (g_settings.volumeChangeStep == 2) {
             return FALSE;
+        }
+
+        if (g_target == Target::ShellExperienceHost) {
+            bool useModernIndicator =
+                g_settings.volumeIndicator == VolumeIndicator::Modern &&
+                CanUseModernIndicator();
+            if (!useModernIndicator) {
+                return FALSE;
+            }
+        } else if (g_target == Target::SndVol) {
+            bool useClassicIndicator =
+                g_settings.volumeIndicator == VolumeIndicator::Classic ||
+                (g_settings.volumeIndicator == VolumeIndicator::Modern &&
+                 !CanUseModernIndicator());
+            if (!useClassicIndicator) {
+                return FALSE;
+            }
         }
 
         HMODULE user32Module = GetModuleHandle(L"user32.dll");
@@ -1934,9 +1937,29 @@ BOOL Wh_ModSettingsChanged(BOOL* bReload) {
 
     LoadSettings();
 
-    if (g_target == Target::ShellExperienceHost) {
-        return g_settings.volumeIndicator == VolumeIndicator::Modern &&
-               g_settings.volumeChangeStep != 2;
+    if (g_target == Target::ShellExperienceHost || g_target == Target::SndVol) {
+        if (g_settings.volumeChangeStep == 2) {
+            return FALSE;
+        }
+
+        if (g_target == Target::ShellExperienceHost) {
+            bool useModernIndicator =
+                g_settings.volumeIndicator == VolumeIndicator::Modern &&
+                CanUseModernIndicator();
+            if (!useModernIndicator) {
+                return FALSE;
+            }
+        } else if (g_target == Target::SndVol) {
+            bool useClassicIndicator =
+                g_settings.volumeIndicator == VolumeIndicator::Classic ||
+                (g_settings.volumeIndicator == VolumeIndicator::Modern &&
+                 !CanUseModernIndicator());
+            if (!useClassicIndicator) {
+                return FALSE;
+            }
+        }
+
+        return TRUE;
     }
 
     *bReload = g_settings.oldTaskbarOnWin11 != prevOldTaskbarOnWin11 ||
