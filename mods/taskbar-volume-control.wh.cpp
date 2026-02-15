@@ -70,8 +70,8 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 - ctrlScrollVolumeChange: false
   $name: Ctrl + Scroll to change volume
   $description: >-
-    When enabled, holding the Ctrl key and scrolling the mouse wheel will change
-    the system volume.
+    When enabled, scrolling the mouse wheel will only change the volume when
+    the Ctrl key is held down.
 - scrollAnywhereKeys:
   - Shift: false
   - Ctrl: false
