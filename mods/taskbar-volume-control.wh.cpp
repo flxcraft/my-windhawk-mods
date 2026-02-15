@@ -2093,14 +2093,13 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
             }
         }
 
-        bool isInTaskbarRegion = false;
+        bool isInScrollArea = false;
 
-        RECT rc;
-        if (GetWindowRect(hTaskbarWnd, &rc) && PtInRect(&rc, pt)) {
-            isInTaskbarRegion = true;
+        if (IsPointInsideScrollArea(hTaskbarWnd, pt)) {
+            isInScrollArea = true;
         }
 
-        if (!isInTaskbarRegion) {
+        if (!isInScrollArea) {
             DWORD dwTaskbarThreadId = g_dwTaskbarThreadId;
             if (dwTaskbarThreadId) {
                 // EnumThreadWindows returns FALSE if the callback returned
@@ -2114,21 +2113,20 @@ LRESULT CALLBACK LowLevelMouseProc(int nCode, WPARAM wParam, LPARAM lParam) {
                                                  ARRAYSIZE(szClassName)) &&
                                     _wcsicmp(szClassName,
                                              L"Shell_SecondaryTrayWnd") == 0) {
-                                    RECT rc;
-                                    if (GetWindowRect(hWnd, &rc) &&
-                                        PtInRect(&rc, *(POINT*)lParam)) {
+                                    if (IsPointInsideScrollArea(
+                                            hWnd, *(POINT*)lParam)) {
                                         return FALSE;
                                     }
                                 }
                                 return TRUE;
                             },
                         (LPARAM)&pt)) {
-                    isInTaskbarRegion = true;
+                    isInScrollArea = true;
                 }
             }
         }
 
-        if (isInTaskbarRegion) {
+        if (isInScrollArea) {
             WORD mode = (g_settings.fullScreenScrolling ==
                          FullScreenScrolling::withoutIndicator)
                             ? 1
