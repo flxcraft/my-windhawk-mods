@@ -62,6 +62,13 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
   - taskbar: The taskbar
   - notification_area: The tray area
   - taskbarWithoutNotificationArea: The taskbar without the tray area
+  - none: None (only additional scroll regions)
+- additionalScrollRegions: ""
+  $name: Additional scroll regions
+  $description: >-
+    A comma-separated list of additional regions along the taskbar where
+    scrolling will control the system volume. Each region is a range like
+    "100-200" (pixels) or "20%-50%" (percentage of taskbar length).
 - middleClickToMute: true
   $name: Middle click to mute
   $description: >-
@@ -125,7 +132,10 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 #include <windowsx.h>
 
 #include <atomic>
+#include <optional>
+#include <string_view>
 #include <unordered_set>
+#include <vector>
 
 enum class VolumeIndicator {
     None,
@@ -138,6 +148,7 @@ enum class ScrollArea {
     taskbar,
     notificationArea,
     taskbarWithoutNotificationArea,
+    none,
 };
 
 enum class FullScreenScrolling {
@@ -346,7 +357,7 @@ bool GetNotificationAreaRect(HWND hMMTaskbarWnd, RECT* rcResult) {
     return true;
 }
 
-bool IsPointInsideScrollArea(HWND hMMTaskbarWnd, POINT pt) {
+bool IsPointInsideTaskbarScrollArea(HWND hMMTaskbarWnd, POINT pt) {
     switch (g_settings.scrollArea) {
         case ScrollArea::taskbar: {
             RECT rc;
@@ -365,6 +376,9 @@ bool IsPointInsideScrollArea(HWND hMMTaskbarWnd, POINT pt) {
                    (!GetNotificationAreaRect(hMMTaskbarWnd, &rc) ||
                     !PtInRect(&rc, pt));
         }
+
+        case ScrollArea::none:
+            return false;
     }
 
     return false;
@@ -473,6 +487,149 @@ BOOL WindowsVersionInit() {
 }
 
 #pragma endregion  // functions
+
+#pragma region regions
+
+struct Region {
+    bool isPercentage;
+    int start;
+    int end;
+};
+
+std::vector<Region> g_regions;
+
+// https://stackoverflow.com/a/54364173
+std::wstring_view TrimStringView(std::wstring_view s) {
+    s.remove_prefix(std::min(s.find_first_not_of(L" \t\r\v\n"), s.size()));
+    s.remove_suffix(
+        std::min(s.size() - s.find_last_not_of(L" \t\r\v\n") - 1, s.size()));
+    return s;
+}
+
+// https://stackoverflow.com/a/46931770
+std::vector<std::wstring_view> SplitStringView(std::wstring_view s,
+                                               std::wstring_view delimiter) {
+    size_t pos_start = 0, pos_end, delim_len = delimiter.length();
+    std::wstring_view token;
+    std::vector<std::wstring_view> res;
+
+    while ((pos_end = s.find(delimiter, pos_start)) !=
+           std::wstring_view::npos) {
+        token = s.substr(pos_start, pos_end - pos_start);
+        pos_start = pos_end + delim_len;
+        res.push_back(token);
+    }
+
+    res.push_back(s.substr(pos_start));
+    return res;
+}
+
+bool SvToInt(std::wstring_view s, int* result) {
+    if (s.empty()) {
+        return false;
+    }
+
+    int value = 0;
+    for (WCHAR c : s) {
+        if (c < L'0' || c > L'9') {
+            return false;
+        }
+        value = value * 10 + (c - L'0');
+    }
+
+    *result = value;
+    return true;
+}
+
+std::optional<Region> ParseRegion(std::wstring_view regionStr) {
+    auto parts = SplitStringView(regionStr, L"-");
+    if (parts.size() != 2) {
+        Wh_Log(L"Invalid region (expected start-end): %.*s",
+               (int)regionStr.size(), regionStr.data());
+        return std::nullopt;
+    }
+
+    auto startStr = TrimStringView(parts[0]);
+    auto endStr = TrimStringView(parts[1]);
+
+    bool startIsPercentage = !startStr.empty() && startStr.back() == L'%';
+    bool endIsPercentage = !endStr.empty() && endStr.back() == L'%';
+    if (startIsPercentage != endIsPercentage) {
+        Wh_Log(L"Invalid region (mixed percent and pixel): %.*s",
+               (int)regionStr.size(), regionStr.data());
+        return std::nullopt;
+    }
+
+    bool isPercentage = startIsPercentage;
+    if (isPercentage) {
+        startStr.remove_suffix(1);
+        endStr.remove_suffix(1);
+    }
+
+    int start;
+    int end;
+    if (!SvToInt(startStr, &start) || !SvToInt(endStr, &end)) {
+        Wh_Log(L"Invalid region (non-numeric values): %.*s",
+               (int)regionStr.size(), regionStr.data());
+        return std::nullopt;
+    }
+
+    if (start >= end) {
+        Wh_Log(L"Invalid region (start must be less than end): %.*s",
+               (int)regionStr.size(), regionStr.data());
+        return std::nullopt;
+    }
+
+    return Region{isPercentage, start, end};
+}
+
+bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd, POINT pt) {
+    if (g_regions.empty()) {
+        return false;
+    }
+
+    RECT rc;
+    if (!GetWindowRect(hMMTaskbarWnd, &rc) || !PtInRect(&rc, pt)) {
+        return false;
+    }
+
+    bool isHorizontal = (rc.right - rc.left) >= (rc.bottom - rc.top);
+    int taskbarLength;
+    int cursorOffset;
+    if (isHorizontal) {
+        taskbarLength = rc.right - rc.left;
+        cursorOffset = pt.x - rc.left;
+    } else {
+        taskbarLength = rc.bottom - rc.top;
+        cursorOffset = pt.y - rc.top;
+    }
+
+    UINT dpi = GetDpiForWindowWithFallback(hMMTaskbarWnd);
+
+    for (const auto& region : g_regions) {
+        int start, end;
+        if (region.isPercentage) {
+            start = MulDiv(taskbarLength, region.start, 100);
+            end = MulDiv(taskbarLength, region.end, 100);
+        } else {
+            start = MulDiv(region.start, dpi, 96);
+            end = MulDiv(region.end, dpi, 96);
+        }
+
+        if (cursorOffset >= start && cursorOffset <= end) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool IsPointInsideScrollArea(HWND hMMTaskbarWnd, POINT pt) {
+    return IsPointInsideTaskbarScrollArea(hMMTaskbarWnd, pt) ||
+           IsPointInsideAdditionalRegion(hMMTaskbarWnd, pt);
+}
+
+#pragma endregion  // regions
 
 #pragma region volume_functions
 
@@ -1711,6 +1868,8 @@ void LoadSettings() {
         g_settings.scrollArea = ScrollArea::notificationArea;
     } else if (wcscmp(scrollArea, L"taskbarWithoutNotificationArea") == 0) {
         g_settings.scrollArea = ScrollArea::taskbarWithoutNotificationArea;
+    } else if (wcscmp(scrollArea, L"none") == 0) {
+        g_settings.scrollArea = ScrollArea::none;
     }
     Wh_FreeStringSetting(scrollArea);
 
@@ -1739,6 +1898,20 @@ void LoadSettings() {
         Wh_GetIntSetting(L"noAutomaticMuteToggle");
     g_settings.volumeChangeStep = Wh_GetIntSetting(L"volumeChangeStep");
     g_settings.oldTaskbarOnWin11 = Wh_GetIntSetting(L"oldTaskbarOnWin11");
+
+    g_regions.clear();
+    PCWSTR additionalScrollRegions =
+        Wh_GetStringSetting(L"additionalScrollRegions");
+    for (auto regionStr : SplitStringView(additionalScrollRegions, L",")) {
+        regionStr = TrimStringView(regionStr);
+        if (regionStr.empty()) {
+            continue;
+        }
+        if (auto region = ParseRegion(regionStr)) {
+            g_regions.push_back(*region);
+        }
+    }
+    Wh_FreeStringSetting(additionalScrollRegions);
 }
 
 using VolumeSystemTrayIconDataModel_OnIconClicked_t =
