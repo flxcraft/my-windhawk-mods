@@ -313,15 +313,33 @@ bool GetNotificationAreaRect(HWND hMMTaskbarWnd, RECT* rcResult) {
         return false;
     }
 
-    // Just consider the last pixels as a fallback, not accurate, but better
-    // than nothing.
-    int lastPixels = MulDiv(50, GetDpiForWindowWithFallback(hMMTaskbarWnd), 96);
+    // For secondary taskbars, as a fallback, use the width of the notification
+    // area on the primary taskbar.
+    int trayAreaWidth = 0;
+    if (hMMTaskbarWnd != g_hTaskbarWnd) {
+        HWND hTrayNotifyWnd =
+            FindWindowEx(g_hTaskbarWnd, NULL, L"TrayNotifyWnd", NULL);
+        if (hTrayNotifyWnd && GetWindowRect(hTrayNotifyWnd, rcResult) &&
+            !IsRectEmpty(rcResult)) {
+            trayAreaWidth = MulDiv(rcResult->right - rcResult->left,
+                                   GetDpiForWindowWithFallback(hMMTaskbarWnd),
+                                   GetDpiForWindowWithFallback(g_hTaskbarWnd));
+        }
+    }
+
+    if (trayAreaWidth == 0) {
+        // Just consider the last pixels as a fallback, not accurate, but better
+        // than nothing.
+        trayAreaWidth =
+            MulDiv(50, GetDpiForWindowWithFallback(hMMTaskbarWnd), 96);
+    }
+
     CopyRect(rcResult, &rcTaskbar);
-    if (rcResult->right - rcResult->left > lastPixels) {
+    if (rcResult->right - rcResult->left > trayAreaWidth) {
         if (GetWindowLong(hMMTaskbarWnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) {
-            rcResult->right = rcResult->left + lastPixels;
+            rcResult->right = rcResult->left + trayAreaWidth;
         } else {
-            rcResult->left = rcResult->right - lastPixels;
+            rcResult->left = rcResult->right - trayAreaWidth;
         }
     }
 
