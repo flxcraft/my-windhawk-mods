@@ -32,15 +32,20 @@ Currently, the following actions are supported:
 * Switch virtual desktop
 * Change monitor brightness
 
-Also check out the following related mods:
-
-* Taskbar Volume Control
-* Cycle taskbar buttons with mouse wheel
-
 **Note:** Some laptop touchpads might not support scrolling over the taskbar. A
 workaround is to use the "pinch to zoom" gesture. For details, check out [a
 relevant
 issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt-trigger-mouse-wheel-options).
+
+## Related mods
+
+* For system-wide volume control, check out the [Taskbar Volume
+  Control](https://windhawk.net/mods/taskbar-volume-control) mod.
+* For per-app volume control, check out the [Taskbar Volume Control
+  Per-App](https://windhawk.net/mods/taskbar-volume-control-per-app) mod.
+* For cycling between taskbar buttons with the mouse wheel while hovering over
+  the taskbar, check out the [Cycle taskbar buttons with mouse
+  wheel](https://windhawk.net/mods/taskbar-wheel-cycle) mod.
 */
 // ==/WindhawkModReadme==
 
@@ -133,8 +138,8 @@ struct {
     bool oldTaskbarOnWin11;
 } g_settings;
 
-bool g_initialized = false;
-bool g_inputSiteProcHooked = false;
+std::atomic<bool> g_initialized;
+bool g_inputSiteProcHooked;
 std::unordered_set<HWND> g_secondaryTaskbarWindows;
 
 enum {
@@ -298,6 +303,140 @@ bool GetNotificationAreaRect(HWND hMMTaskbarWnd, RECT* rcResult) {
     return true;
 }
 
+bool IsPointInsideTaskbarScrollArea(HWND hMMTaskbarWnd, POINT pt) {
+    switch (g_settings.scrollArea) {
+        case ScrollArea::taskbar: {
+            RECT rc;
+            return GetWindowRect(hMMTaskbarWnd, &rc) && PtInRect(&rc, pt);
+        }
+
+        case ScrollArea::notificationArea: {
+            RECT rc;
+            return GetNotificationAreaRect(hMMTaskbarWnd, &rc) &&
+                   PtInRect(&rc, pt);
+        }
+
+        case ScrollArea::taskbarWithoutNotificationArea: {
+            RECT rc;
+            return GetWindowRect(hMMTaskbarWnd, &rc) && PtInRect(&rc, pt) &&
+                   (!GetNotificationAreaRect(hMMTaskbarWnd, &rc) ||
+                    !PtInRect(&rc, pt));
+        }
+
+        case ScrollArea::none:
+            return false;
+    }
+
+    return false;
+}
+
+VS_FIXEDFILEINFO* GetModuleVersionInfo(HMODULE hModule, UINT* puPtrLen) {
+    HRSRC hResource;
+    HGLOBAL hGlobal;
+    void* pData;
+    void* pFixedFileInfo;
+    UINT uPtrLen;
+
+    pFixedFileInfo = NULL;
+    uPtrLen = 0;
+
+    hResource =
+        FindResource(hModule, MAKEINTRESOURCE(VS_VERSION_INFO), RT_VERSION);
+    if (hResource != NULL) {
+        hGlobal = LoadResource(hModule, hResource);
+        if (hGlobal != NULL) {
+            pData = LockResource(hGlobal);
+            if (pData != NULL) {
+                if (!VerQueryValue(pData, L"\\", &pFixedFileInfo, &uPtrLen) ||
+                    uPtrLen == 0) {
+                    pFixedFileInfo = NULL;
+                    uPtrLen = 0;
+                }
+            }
+        }
+    }
+
+    if (puPtrLen)
+        *puPtrLen = uPtrLen;
+
+    return (VS_FIXEDFILEINFO*)pFixedFileInfo;
+}
+
+BOOL WindowsVersionInit() {
+    g_nWinVersion = WIN_VERSION_UNSUPPORTED;
+
+    VS_FIXEDFILEINFO* pFixedFileInfo = GetModuleVersionInfo(NULL, NULL);
+    if (!pFixedFileInfo)
+        return FALSE;
+
+    WORD nMajor = HIWORD(pFixedFileInfo->dwFileVersionMS);
+    WORD nMinor = LOWORD(pFixedFileInfo->dwFileVersionMS);
+    WORD nBuild = HIWORD(pFixedFileInfo->dwFileVersionLS);
+    WORD nQFE = LOWORD(pFixedFileInfo->dwFileVersionLS);
+
+    switch (nMajor) {
+        case 6:
+            switch (nMinor) {
+                case 1:
+                    g_nWinVersion = WIN_VERSION_7;
+                    break;
+
+                case 2:
+                    g_nWinVersion = WIN_VERSION_8;
+                    break;
+
+                case 3:
+                    if (nQFE < 17000)
+                        g_nWinVersion = WIN_VERSION_81;
+                    else
+                        g_nWinVersion = WIN_VERSION_811;
+                    break;
+
+                case 4:
+                    g_nWinVersion = WIN_VERSION_10_T1;
+                    break;
+            }
+            break;
+
+        case 10:
+            if (nBuild <= 10240)
+                g_nWinVersion = WIN_VERSION_10_T1;
+            else if (nBuild <= 10586)
+                g_nWinVersion = WIN_VERSION_10_T2;
+            else if (nBuild <= 14393)
+                g_nWinVersion = WIN_VERSION_10_R1;
+            else if (nBuild <= 15063)
+                g_nWinVersion = WIN_VERSION_10_R2;
+            else if (nBuild <= 16299)
+                g_nWinVersion = WIN_VERSION_10_R3;
+            else if (nBuild <= 17134)
+                g_nWinVersion = WIN_VERSION_10_R4;
+            else if (nBuild <= 17763)
+                g_nWinVersion = WIN_VERSION_10_R5;
+            else if (nBuild <= 18362)
+                g_nWinVersion = WIN_VERSION_10_19H1;
+            else if (nBuild <= 19041)
+                g_nWinVersion = WIN_VERSION_10_20H1;
+            else if (nBuild <= 20348)
+                g_nWinVersion = WIN_VERSION_SERVER_2022;
+            else if (nBuild <= 22000)
+                g_nWinVersion = WIN_VERSION_11_21H2;
+            else
+                g_nWinVersion = WIN_VERSION_11_22H2;
+            break;
+    }
+
+    if (g_nWinVersion == WIN_VERSION_UNSUPPORTED)
+        return FALSE;
+
+    return TRUE;
+}
+
+#pragma endregion  // functions
+
+#pragma region regions
+
+// https://stackoverflow.com/a/54364173
 std::wstring_view TrimStringView(std::wstring_view s) {
     s.remove_prefix(std::min(s.find_first_not_of(L" \t\r\v\n"), s.size()));
     s.remove_suffix(
@@ -423,141 +562,12 @@ bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd, POINT pt) {
     return false;
 }
 
-bool IsPointInsideTaskbarScrollArea(HWND hMMTaskbarWnd, POINT pt) {
-    switch (g_settings.scrollArea) {
-        case ScrollArea::taskbar: {
-            RECT rc;
-            return GetWindowRect(hMMTaskbarWnd, &rc) && PtInRect(&rc, pt);
-        }
-
-        case ScrollArea::notificationArea: {
-            RECT rc;
-            return GetNotificationAreaRect(hMMTaskbarWnd, &rc) &&
-                   PtInRect(&rc, pt);
-        }
-
-        case ScrollArea::taskbarWithoutNotificationArea: {
-            RECT rc;
-            return GetWindowRect(hMMTaskbarWnd, &rc) && PtInRect(&rc, pt) &&
-                   (!GetNotificationAreaRect(hMMTaskbarWnd, &rc) ||
-                    !PtInRect(&rc, pt));
-        }
-
-        case ScrollArea::none:
-            return false;
-    }
-
-    return false;
-}
-
 bool IsPointInsideScrollArea(HWND hMMTaskbarWnd, POINT pt) {
     return IsPointInsideTaskbarScrollArea(hMMTaskbarWnd, pt) ||
            IsPointInsideAdditionalRegion(hMMTaskbarWnd, pt);
 }
 
-VS_FIXEDFILEINFO* GetModuleVersionInfo(HMODULE hModule, UINT* puPtrLen) {
-    HRSRC hResource;
-    HGLOBAL hGlobal;
-    void* pData;
-    void* pFixedFileInfo;
-    UINT uPtrLen;
-
-    pFixedFileInfo = NULL;
-    uPtrLen = 0;
-
-    hResource =
-        FindResource(hModule, MAKEINTRESOURCE(VS_VERSION_INFO), RT_VERSION);
-    if (hResource != NULL) {
-        hGlobal = LoadResource(hModule, hResource);
-        if (hGlobal != NULL) {
-            pData = LockResource(hGlobal);
-            if (pData != NULL) {
-                if (!VerQueryValue(pData, L"\\", &pFixedFileInfo, &uPtrLen) ||
-                    uPtrLen == 0) {
-                    pFixedFileInfo = NULL;
-                    uPtrLen = 0;
-                }
-            }
-        }
-    }
-
-    if (puPtrLen)
-        *puPtrLen = uPtrLen;
-
-    return (VS_FIXEDFILEINFO*)pFixedFileInfo;
-}
-
-BOOL WindowsVersionInit() {
-    g_nWinVersion = WIN_VERSION_UNSUPPORTED;
-
-    VS_FIXEDFILEINFO* pFixedFileInfo = GetModuleVersionInfo(NULL, NULL);
-    if (!pFixedFileInfo)
-        return FALSE;
-
-    WORD nMajor = HIWORD(pFixedFileInfo->dwFileVersionMS);
-    WORD nMinor = LOWORD(pFixedFileInfo->dwFileVersionMS);
-    WORD nBuild = HIWORD(pFixedFileInfo->dwFileVersionLS);
-    WORD nQFE = LOWORD(pFixedFileInfo->dwFileVersionLS);
-
-    switch (nMajor) {
-        case 6:
-            switch (nMinor) {
-                case 1:
-                    g_nWinVersion = WIN_VERSION_7;
-                    break;
-
-                case 2:
-                    g_nWinVersion = WIN_VERSION_8;
-                    break;
-
-                case 3:
-                    if (nQFE < 17000)
-                        g_nWinVersion = WIN_VERSION_81;
-                    else
-                        g_nWinVersion = WIN_VERSION_811;
-                    break;
-
-                case 4:
-                    g_nWinVersion = WIN_VERSION_10_T1;
-                    break;
-            }
-            break;
-
-        case 10:
-            if (nBuild <= 10240)
-                g_nWinVersion = WIN_VERSION_10_T1;
-            else if (nBuild <= 10586)
-                g_nWinVersion = WIN_VERSION_10_T2;
-            else if (nBuild <= 14393)
-                g_nWinVersion = WIN_VERSION_10_R1;
-            else if (nBuild <= 15063)
-                g_nWinVersion = WIN_VERSION_10_R2;
-            else if (nBuild <= 16299)
-                g_nWinVersion = WIN_VERSION_10_R3;
-            else if (nBuild <= 17134)
-                g_nWinVersion = WIN_VERSION_10_R4;
-            else if (nBuild <= 17763)
-                g_nWinVersion = WIN_VERSION_10_R5;
-            else if (nBuild <= 18362)
-                g_nWinVersion = WIN_VERSION_10_19H1;
-            else if (nBuild <= 19041)
-                g_nWinVersion = WIN_VERSION_10_20H1;
-            else if (nBuild <= 20348)
-                g_nWinVersion = WIN_VERSION_SERVER_2022;
-            else if (nBuild <= 22000)
-                g_nWinVersion = WIN_VERSION_11_21H2;
-            else
-                g_nWinVersion = WIN_VERSION_11_22H2;
-            break;
-    }
-
-    if (g_nWinVersion == WIN_VERSION_UNSUPPORTED)
-        return FALSE;
-
-    return TRUE;
-}
-
-#pragma endregion  // functions
+#pragma endregion  // regions
 
 #pragma region brightness
 
@@ -1086,64 +1096,6 @@ void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam) {
 
 ////////////////////////////////////////////////////////////
 
-// wParam - TRUE to subclass, FALSE to unsubclass
-// lParam - subclass data
-UINT g_subclassRegisteredMsg = RegisterWindowMessage(
-    L"Windhawk_SetWindowSubclassFromAnyThread_" WH_MOD_ID);
-
-BOOL SetWindowSubclassFromAnyThread(HWND hWnd,
-                                    SUBCLASSPROC pfnSubclass,
-                                    UINT_PTR uIdSubclass,
-                                    DWORD_PTR dwRefData) {
-    struct SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM {
-        SUBCLASSPROC pfnSubclass;
-        UINT_PTR uIdSubclass;
-        DWORD_PTR dwRefData;
-        BOOL result;
-    };
-
-    DWORD dwThreadId = GetWindowThreadProcessId(hWnd, nullptr);
-    if (dwThreadId == 0) {
-        return FALSE;
-    }
-
-    if (dwThreadId == GetCurrentThreadId()) {
-        return SetWindowSubclass(hWnd, pfnSubclass, uIdSubclass, dwRefData);
-    }
-
-    HHOOK hook = SetWindowsHookEx(
-        WH_CALLWNDPROC,
-        [](int nCode, WPARAM wParam, LPARAM lParam) -> LRESULT {
-            if (nCode == HC_ACTION) {
-                const CWPSTRUCT* cwp = (const CWPSTRUCT*)lParam;
-                if (cwp->message == g_subclassRegisteredMsg && cwp->wParam) {
-                    SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM* param =
-                        (SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM*)cwp->lParam;
-                    param->result =
-                        SetWindowSubclass(cwp->hwnd, param->pfnSubclass,
-                                          param->uIdSubclass, param->dwRefData);
-                }
-            }
-
-            return CallNextHookEx(nullptr, nCode, wParam, lParam);
-        },
-        nullptr, dwThreadId);
-    if (!hook) {
-        return FALSE;
-    }
-
-    SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM param;
-    param.pfnSubclass = pfnSubclass;
-    param.uIdSubclass = uIdSubclass;
-    param.dwRefData = dwRefData;
-    param.result = FALSE;
-    SendMessage(hWnd, g_subclassRegisteredMsg, TRUE, (LPARAM)&param);
-
-    UnhookWindowsHookEx(hook);
-
-    return param.result;
-}
-
 bool OnMouseWheel(HWND hWnd, WPARAM wParam, LPARAM lParam) {
     if (GetCapture()) {
         return false;
@@ -1171,12 +1123,7 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(_In_ HWND hWnd,
                                            _In_ UINT uMsg,
                                            _In_ WPARAM wParam,
                                            _In_ LPARAM lParam,
-                                           _In_ UINT_PTR uIdSubclass,
                                            _In_ DWORD_PTR dwRefData) {
-    if (uMsg == WM_NCDESTROY || (uMsg == g_subclassRegisteredMsg && !wParam)) {
-        RemoveWindowSubclass(hWnd, TaskbarWindowSubclassProc, 0);
-    }
-
     LRESULT result = 0;
 
     switch (uMsg) {
@@ -1224,11 +1171,13 @@ LRESULT CALLBACK InputSiteWindowProc_Hook(HWND hWnd,
 }
 
 void SubclassTaskbarWindow(HWND hWnd) {
-    SetWindowSubclassFromAnyThread(hWnd, TaskbarWindowSubclassProc, 0, 0);
+    WindhawkUtils::SetWindowSubclassFromAnyThread(hWnd,
+                                                  TaskbarWindowSubclassProc, 0);
 }
 
 void UnsubclassTaskbarWindow(HWND hWnd) {
-    SendMessage(hWnd, g_subclassRegisteredMsg, FALSE, 0);
+    WindhawkUtils::RemoveWindowSubclassFromAnyThread(hWnd,
+                                                     TaskbarWindowSubclassProc);
 }
 
 void HandleIdentifiedInputSiteWindow(HWND hWnd) {
