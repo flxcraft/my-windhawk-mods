@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              taskbar-scroll-actions
 // @name            Taskbar Scroll Actions
-// @description     Assign actions for scrolling over the taskbar, including virtual desktop switching and monitor brightness control
+// @description     Assign actions for scrolling over the taskbar, including virtual desktop switching, brightness control, and microphone volume control
 // @version         1.1
 // @author          m417z
 // @github          https://github.com/m417z
@@ -9,7 +9,7 @@
 // @homepage        https://m417z.com/
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lgdi32 -lole32 -loleaut32 -lversion
+// @compilerOptions -lcomctl32 -ldxva2 -lgdi32 -lole32 -loleaut32 -lversion
 // ==/WindhawkMod==
 
 // Source code is published under The GNU General Public License v3.0.
@@ -25,12 +25,17 @@
 # Taskbar Scroll Actions
 
 Assign actions for scrolling over the taskbar, including virtual desktop
-switching and monitor brightness control.
+switching, brightness control, and microphone volume control.
 
 Currently, the following actions are supported:
 
 * Switch virtual desktop
 * Change monitor brightness
+* Change microphone volume
+
+Brightness control works with both external monitors (via DDC/CI) and laptop
+internal displays (via WMI). For external monitors, DDC/CI must be enabled in
+the monitor's OSD settings.
 
 **Note:** Some laptop touchpads might not support scrolling over the taskbar. A
 workaround is to use the "pinch to zoom" gesture. For details, check out [a
@@ -103,7 +108,9 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 #include <commctrl.h>
 #include <comutil.h>
 #include <endpointvolume.h>
+#include <highlevelmonitorconfigurationapi.h>
 #include <mmdeviceapi.h>
+#include <physicalmonitorenumerationapi.h>
 #include <psapi.h>
 #include <wbemcli.h>
 #include <windowsx.h>
@@ -597,7 +604,7 @@ bool IsPointInsideEntryScrollArea(HWND hMMTaskbarWnd,
 // Reference:
 // https://github.com/stefankueng/tools/blob/e7cd50c6ac3a50f6dac84c6aace519349164155e/Misc/AAClr/src/Utils.cpp
 
-int GetBrightness() {
+int GetBrightnessWmi() {
     int ret = -1;
 
     IWbemLocator* pLocator = NULL;
@@ -714,7 +721,7 @@ cleanup:
     return ret;
 }
 
-bool SetBrightness(int val) {
+bool SetBrightnessWmi(int val) {
     bool bRet = true;
 
     IWbemLocator* pLocator = NULL;
@@ -918,6 +925,75 @@ cleanup:
     return bRet;
 }
 
+// DDC/CI brightness control (for external monitors).
+// VCP code 0x10 = Luminance (Brightness) per MCCS standard.
+
+bool AdjustBrightnessDdcCi(HMONITOR hMonitor, int delta) {
+    DWORD numPhysical = 0;
+    if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor, &numPhysical) ||
+        numPhysical == 0) {
+        return false;
+    }
+
+    std::vector<PHYSICAL_MONITOR> physical(numPhysical);
+    if (!GetPhysicalMonitorsFromHMONITOR(hMonitor, numPhysical,
+                                         physical.data())) {
+        return false;
+    }
+
+    bool anySuccess = false;
+
+    for (DWORD i = 0; i < numPhysical; i++) {
+        DWORD dwMin = 0;
+        DWORD dwCurrent = 0;
+        DWORD dwMax = 0;
+        if (!GetMonitorBrightness(physical[i].hPhysicalMonitor, &dwMin,
+                                  &dwCurrent, &dwMax)) {
+            continue;
+        }
+
+        DWORD newVal = dwCurrent;
+        if (delta > 0) {
+            newVal = std::min(dwCurrent + (DWORD)delta, dwMax);
+        } else if (delta < 0) {
+            DWORD sub = (DWORD)(-delta);
+            newVal = sub <= dwCurrent - dwMin ? dwCurrent - sub : dwMin;
+        }
+
+        Wh_Log(L"DDC/CI: %s brightness %lu -> %lu (min %lu, max %lu)",
+               physical[i].szPhysicalMonitorDescription, dwCurrent, newVal,
+               dwMin, dwMax);
+
+        if (SetMonitorBrightness(physical[i].hPhysicalMonitor, newVal)) {
+            anySuccess = true;
+        }
+    }
+
+    DestroyPhysicalMonitors(numPhysical, physical.data());
+    return anySuccess;
+}
+
+bool AdjustBrightness(HWND hTaskbarWnd, int delta) {
+    // Try DDC/CI first (works for external monitors, targets the specific
+    // monitor the taskbar is on, and is faster than WMI).
+    HMONITOR hMonitor =
+        MonitorFromWindow(hTaskbarWnd, MONITOR_DEFAULTTONEAREST);
+    if (hMonitor && AdjustBrightnessDdcCi(hMonitor, delta)) {
+        return true;
+    }
+
+    // Fall back to WMI (works for laptop internal displays).
+    int brightness = GetBrightnessWmi();
+    if (brightness >= 0) {
+        int newBrightness = std::clamp(brightness + delta, 0, 100);
+        Wh_Log(L"WMI: Changing brightness from %d to %d", brightness,
+               newBrightness);
+        return SetBrightnessWmi(newBrightness);
+    }
+
+    return false;
+}
+
 #pragma endregion  // brightness
 
 // Use a keyboard simulation and not IVirtualDesktopManagerInternal, since the
@@ -1064,7 +1140,10 @@ int g_lastScrollDeltaRemainder;
 DWORD g_lastActionTime;
 int g_lastScrollActionIndex = -1;
 
-void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam, int entryIndex) {
+void InvokeScrollAction(HWND hWnd,
+                        WPARAM wParam,
+                        LPARAM lMousePosParam,
+                        int entryIndex) {
     const auto& entry = g_settings.scrollActions[entryIndex];
 
     if (entryIndex != g_lastScrollActionIndex) {
@@ -1107,17 +1186,11 @@ void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam, int entryIndex) {
                 SwitchDesktopViaKeyboardShortcut(clicks);
                 break;
 
-            case ScrollAction::brightnessChange: {
-                int brightness = GetBrightness();
-                if (brightness != -1) {
-                    Wh_Log(L"Changing brightness from %d to %d", brightness,
-                           brightness + clicks);
-                    SetBrightness(brightness + clicks);
-                } else {
-                    Wh_Log(L"Error getting current brightness");
+            case ScrollAction::brightnessChange:
+                if (!AdjustBrightness(hWnd, clicks)) {
+                    Wh_Log(L"Error adjusting brightness");
                 }
                 break;
-            }
 
             case ScrollAction::micVolumeChange:
                 if (AddMicMasterVolumeLevelScalar(clicks * 0.01f)) {
@@ -1154,7 +1227,7 @@ bool OnMouseWheel(HWND hWnd, WPARAM wParam, LPARAM lParam) {
             ZeroMemory(&input, sizeof(INPUT));
             SendInput(1, &input, sizeof(INPUT));
 
-            InvokeScrollAction(wParam, lParam, i);
+            InvokeScrollAction(hWnd, wParam, lParam, i);
             return true;
         }
     }
