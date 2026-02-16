@@ -1,7 +1,7 @@
 // ==WindhawkMod==
 // @id              taskbar-scroll-actions
 // @name            Taskbar Scroll Actions
-// @description     Assign actions for scrolling over the taskbar, including virtual desktop switching and monitor brightness control
+// @description     Assign actions for scrolling over the taskbar, including virtual desktop switching and brightness control
 // @version         1.1
 // @author          m417z
 // @github          https://github.com/m417z
@@ -9,7 +9,7 @@
 // @homepage        https://m417z.com/
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lcomctl32 -lgdi32 -lole32 -loleaut32 -lversion
+// @compilerOptions -lcomctl32 -lgdi32 -lole32 -loleaut32 -lversion -ldxva2
 // ==/WindhawkMod==
 
 // Source code is published under The GNU General Public License v3.0.
@@ -25,12 +25,13 @@
 # Taskbar Scroll Actions
 
 Assign actions for scrolling over the taskbar, including virtual desktop
-switching and monitor brightness control.
+switching and brightness control.
 
 Currently, the following actions are supported:
 
 * Switch virtual desktop
-* Change monitor brightness
+* Change brightness (built-in display, via WMI)
+* Change brightness (external display, via DDC/CI)
 
 **Note:** Some laptop touchpads might not support scrolling over the taskbar. A
 workaround is to use the "pinch to zoom" gesture. For details, check out [a
@@ -56,7 +57,8 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
       $name: Scroll action
       $options:
       - virtualDesktopSwitch: Switch virtual desktop
-      - brightnessChange: Change monitor brightness
+      - brightnessChange: Change brightness (built-in display)
+      - brightnessChangeDdcCi: Change brightness (external display, DDC/CI)
       - micVolumeChange: Change microphone volume
     - scrollArea: taskbar
       $name: Scroll area
@@ -103,7 +105,9 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 #include <commctrl.h>
 #include <comutil.h>
 #include <endpointvolume.h>
+#include <highlevelmonitorconfigurationapi.h>
 #include <mmdeviceapi.h>
+#include <physicalmonitorenumerationapi.h>
 #include <psapi.h>
 #include <wbemcli.h>
 #include <windowsx.h>
@@ -118,6 +122,7 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 enum class ScrollAction {
     virtualDesktopSwitch,
     brightnessChange,
+    brightnessChangeDdcCi,
     micVolumeChange,
 };
 
@@ -368,8 +373,9 @@ VS_FIXEDFILEINFO* GetModuleVersionInfo(HMODULE hModule, UINT* puPtrLen) {
         }
     }
 
-    if (puPtrLen)
+    if (puPtrLen) {
         *puPtrLen = uPtrLen;
+    }
 
     return (VS_FIXEDFILEINFO*)pFixedFileInfo;
 }
@@ -378,8 +384,9 @@ BOOL WindowsVersionInit() {
     g_nWinVersion = WIN_VERSION_UNSUPPORTED;
 
     VS_FIXEDFILEINFO* pFixedFileInfo = GetModuleVersionInfo(NULL, NULL);
-    if (!pFixedFileInfo)
+    if (!pFixedFileInfo) {
         return FALSE;
+    }
 
     WORD nMajor = HIWORD(pFixedFileInfo->dwFileVersionMS);
     WORD nMinor = LOWORD(pFixedFileInfo->dwFileVersionMS);
@@ -398,10 +405,11 @@ BOOL WindowsVersionInit() {
                     break;
 
                 case 3:
-                    if (nQFE < 17000)
+                    if (nQFE < 17000) {
                         g_nWinVersion = WIN_VERSION_81;
-                    else
+                    } else {
                         g_nWinVersion = WIN_VERSION_811;
+                    }
                     break;
 
                 case 4:
@@ -411,35 +419,37 @@ BOOL WindowsVersionInit() {
             break;
 
         case 10:
-            if (nBuild <= 10240)
+            if (nBuild <= 10240) {
                 g_nWinVersion = WIN_VERSION_10_T1;
-            else if (nBuild <= 10586)
+            } else if (nBuild <= 10586) {
                 g_nWinVersion = WIN_VERSION_10_T2;
-            else if (nBuild <= 14393)
+            } else if (nBuild <= 14393) {
                 g_nWinVersion = WIN_VERSION_10_R1;
-            else if (nBuild <= 15063)
+            } else if (nBuild <= 15063) {
                 g_nWinVersion = WIN_VERSION_10_R2;
-            else if (nBuild <= 16299)
+            } else if (nBuild <= 16299) {
                 g_nWinVersion = WIN_VERSION_10_R3;
-            else if (nBuild <= 17134)
+            } else if (nBuild <= 17134) {
                 g_nWinVersion = WIN_VERSION_10_R4;
-            else if (nBuild <= 17763)
+            } else if (nBuild <= 17763) {
                 g_nWinVersion = WIN_VERSION_10_R5;
-            else if (nBuild <= 18362)
+            } else if (nBuild <= 18362) {
                 g_nWinVersion = WIN_VERSION_10_19H1;
-            else if (nBuild <= 19041)
+            } else if (nBuild <= 19041) {
                 g_nWinVersion = WIN_VERSION_10_20H1;
-            else if (nBuild <= 20348)
+            } else if (nBuild <= 20348) {
                 g_nWinVersion = WIN_VERSION_SERVER_2022;
-            else if (nBuild <= 22000)
+            } else if (nBuild <= 22000) {
                 g_nWinVersion = WIN_VERSION_11_21H2;
-            else
+            } else {
                 g_nWinVersion = WIN_VERSION_11_22H2;
+            }
             break;
     }
 
-    if (g_nWinVersion == WIN_VERSION_UNSUPPORTED)
+    if (g_nWinVersion == WIN_VERSION_UNSUPPORTED) {
         return FALSE;
+    }
 
     return TRUE;
 }
@@ -697,10 +707,12 @@ cleanup:
     SysFreeString(ClassPath);
     SysFreeString(bstrQuery);
 
-    if (pLocator)
+    if (pLocator) {
         pLocator->Release();
-    if (pNamespace)
+    }
+    if (pNamespace) {
         pNamespace->Release();
+    }
 
     CoUninitialize();
 
@@ -867,8 +879,9 @@ bool SetBrightness(int val) {
         VariantInit(&pathVariable);
 
         hr = pObj->Get(_bstr_t(L"__PATH"), 0, &pathVariable, NULL, NULL);
-        if (hr != WBEM_S_NO_ERROR)
+        if (hr != WBEM_S_NO_ERROR) {
             goto cleanup;
+        }
 
         hr = pNamespace->ExecMethod(pathVariable.bstrVal, MethodName, 0, NULL,
                                     pInInst, NULL, NULL);
@@ -889,16 +902,21 @@ cleanup:
     SysFreeString(ArgName1);
     SysFreeString(bstrQuery);
 
-    if (pClass)
+    if (pClass) {
         pClass->Release();
-    if (pInInst)
+    }
+    if (pInInst) {
         pInInst->Release();
-    if (pInClass)
+    }
+    if (pInClass) {
         pInClass->Release();
-    if (pLocator)
+    }
+    if (pLocator) {
         pLocator->Release();
-    if (pNamespace)
+    }
+    if (pNamespace) {
         pNamespace->Release();
+    }
 
     CoUninitialize();
 
@@ -906,6 +924,68 @@ cleanup:
 }
 
 #pragma endregion  // brightness
+
+#pragma region ddcci_brightness
+
+bool GetBrightnessDdcCi(HMONITOR hMonitor,
+                        DWORD* currentBrightness,
+                        DWORD* minBrightness,
+                        DWORD* maxBrightness) {
+    DWORD numPhysicalMonitors = 0;
+    if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor,
+                                                 &numPhysicalMonitors) ||
+        numPhysicalMonitors == 0) {
+        return false;
+    }
+
+    std::vector<PHYSICAL_MONITOR> physicalMonitors(numPhysicalMonitors);
+    if (!GetPhysicalMonitorsFromHMONITOR(hMonitor, numPhysicalMonitors,
+                                         physicalMonitors.data())) {
+        return false;
+    }
+
+    bool success = false;
+    for (DWORD i = 0; i < numPhysicalMonitors; i++) {
+        if (GetMonitorBrightness(physicalMonitors[i].hPhysicalMonitor,
+                                 minBrightness, currentBrightness,
+                                 maxBrightness)) {
+            success = true;
+            break;
+        }
+    }
+
+    DestroyPhysicalMonitors(numPhysicalMonitors, physicalMonitors.data());
+    return success;
+}
+
+bool SetBrightnessDdcCi(HMONITOR hMonitor, DWORD brightness) {
+    DWORD numPhysicalMonitors = 0;
+    if (!GetNumberOfPhysicalMonitorsFromHMONITOR(hMonitor,
+                                                 &numPhysicalMonitors) ||
+        numPhysicalMonitors == 0) {
+        return false;
+    }
+
+    std::vector<PHYSICAL_MONITOR> physicalMonitors(numPhysicalMonitors);
+    if (!GetPhysicalMonitorsFromHMONITOR(hMonitor, numPhysicalMonitors,
+                                         physicalMonitors.data())) {
+        return false;
+    }
+
+    bool success = false;
+    for (DWORD i = 0; i < numPhysicalMonitors; i++) {
+        if (SetMonitorBrightness(physicalMonitors[i].hPhysicalMonitor,
+                                 brightness)) {
+            success = true;
+            break;
+        }
+    }
+
+    DestroyPhysicalMonitors(numPhysicalMonitors, physicalMonitors.data());
+    return success;
+}
+
+#pragma endregion  // ddcci_brightness
 
 // Use a keyboard simulation and not IVirtualDesktopManagerInternal, since the
 // latter switches desktop without an animation. See:
@@ -986,8 +1066,9 @@ void MicVolInit() {
     HRESULT hr = CoCreateInstance(
         XIID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER,
         XIID_IMMDeviceEnumerator, (LPVOID*)&g_pDeviceEnumerator);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
         g_pDeviceEnumerator = NULL;
+    }
 }
 
 void MicVolUninit() {
@@ -1021,10 +1102,11 @@ BOOL AddMicMasterVolumeLevelScalar(float fMasterVolumeAdd) {
                         &fMasterVolume))) {
                     fMasterVolume += fMasterVolumeAdd;
 
-                    if (fMasterVolume < 0.0)
+                    if (fMasterVolume < 0.0) {
                         fMasterVolume = 0.0;
-                    else if (fMasterVolume > 1.0)
+                    } else if (fMasterVolume > 1.0) {
                         fMasterVolume = 1.0;
+                    }
 
                     if (SUCCEEDED(endpointVolume->SetMasterVolumeLevelScalar(
                             fMasterVolume, NULL))) {
@@ -1049,7 +1131,10 @@ int g_lastScrollDeltaRemainder;
 DWORD g_lastActionTime;
 int g_lastScrollActionIndex = -1;
 
-void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam, int entryIndex) {
+void InvokeScrollAction(HWND hWnd,
+                        WPARAM wParam,
+                        LPARAM lMousePosParam,
+                        int entryIndex) {
     const auto& entry = g_settings.scrollActions[entryIndex];
 
     if (entryIndex != g_lastScrollActionIndex) {
@@ -1104,6 +1189,39 @@ void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam, int entryIndex) {
                 break;
             }
 
+            case ScrollAction::brightnessChangeDdcCi: {
+                HMONITOR hMonitor =
+                    MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
+                DWORD currentBrightness, minBrightness, maxBrightness;
+                if (hMonitor &&
+                    GetBrightnessDdcCi(hMonitor, &currentBrightness,
+                                       &minBrightness, &maxBrightness)) {
+                    DWORD newBrightness = currentBrightness;
+                    if (clicks > 0) {
+                        newBrightness += clicks;
+                        if (newBrightness > maxBrightness) {
+                            newBrightness = maxBrightness;
+                        }
+                    } else {
+                        DWORD decrease = -clicks;
+                        if (currentBrightness - minBrightness < decrease) {
+                            newBrightness = minBrightness;
+                        } else {
+                            newBrightness -= decrease;
+                        }
+                    }
+                    if (SetBrightnessDdcCi(hMonitor, newBrightness)) {
+                        Wh_Log(L"DDC/CI: Changed brightness from %lu to %d",
+                               currentBrightness, newBrightness);
+                    } else {
+                        Wh_Log(L"DDC/CI: Error setting brightness");
+                    }
+                } else {
+                    Wh_Log(L"DDC/CI: Error getting current brightness");
+                }
+                break;
+            }
+
             case ScrollAction::micVolumeChange:
                 if (AddMicMasterVolumeLevelScalar(clicks * 0.01f)) {
                     Wh_Log(L"Changed microphone volume by %d%%", clicks);
@@ -1139,7 +1257,7 @@ bool OnMouseWheel(HWND hWnd, WPARAM wParam, LPARAM lParam) {
             ZeroMemory(&input, sizeof(INPUT));
             SendInput(1, &input, sizeof(INPUT));
 
-            InvokeScrollAction(wParam, lParam, i);
+            InvokeScrollAction(hWnd, wParam, lParam, i);
             return true;
         }
     }
@@ -1305,12 +1423,14 @@ HWND FindCurrentProcessTaskbarWindows(
 
             DWORD dwProcessId = 0;
             if (!GetWindowThreadProcessId(hWnd, &dwProcessId) ||
-                dwProcessId != GetCurrentProcessId())
+                dwProcessId != GetCurrentProcessId()) {
                 return TRUE;
+            }
 
             WCHAR szClassName[32];
-            if (GetClassName(hWnd, szClassName, ARRAYSIZE(szClassName)) == 0)
+            if (GetClassName(hWnd, szClassName, ARRAYSIZE(szClassName)) == 0) {
                 return TRUE;
+            }
 
             if (_wcsicmp(szClassName, L"Shell_TrayWnd") == 0) {
                 *param.hWnd = hWnd;
@@ -1342,8 +1462,9 @@ HWND WINAPI CreateWindowExW_Hook(DWORD dwExStyle,
     HWND hWnd = CreateWindowExW_Original(dwExStyle, lpClassName, lpWindowName,
                                          dwStyle, X, Y, nWidth, nHeight,
                                          hWndParent, hMenu, hInstance, lpParam);
-    if (!hWnd)
+    if (!hWnd) {
         return hWnd;
+    }
 
     BOOL bTextualClassName = ((ULONG_PTR)lpClassName & ~(ULONG_PTR)0xffff) != 0;
 
@@ -1390,8 +1511,9 @@ HWND WINAPI CreateWindowInBand_Hook(DWORD dwExStyle,
     HWND hWnd = CreateWindowInBand_Original(
         dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight,
         hWndParent, hMenu, hInstance, lpParam, dwBand);
-    if (!hWnd)
+    if (!hWnd) {
         return hWnd;
+    }
 
     BOOL bTextualClassName = ((ULONG_PTR)lpClassName & ~(ULONG_PTR)0xffff) != 0;
 
@@ -1428,6 +1550,8 @@ void LoadSettings() {
         entry.scrollAction = ScrollAction::virtualDesktopSwitch;
         if (wcscmp(scrollAction, L"brightnessChange") == 0) {
             entry.scrollAction = ScrollAction::brightnessChange;
+        } else if (wcscmp(scrollAction, L"brightnessChangeDdcCi") == 0) {
+            entry.scrollAction = ScrollAction::brightnessChangeDdcCi;
         } else if (wcscmp(scrollAction, L"micVolumeChange") == 0) {
             entry.scrollAction = ScrollAction::micVolumeChange;
         }
