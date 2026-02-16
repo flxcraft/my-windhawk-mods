@@ -2,7 +2,7 @@
 // @id              keyboard-shortcut-actions
 // @name            Keyboard Shortcut Actions
 // @description     Trigger custom actions with global keyboard shortcuts (hotkeys): show desktop, mute volume, open Task Manager, media controls, and more
-// @version         1.0
+// @version         1.0.1
 // @author          m417z
 // @github          https://github.com/m417z
 // @twitter         https://twitter.com/m417z
@@ -1433,7 +1433,7 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(_In_ HWND hWnd,
                                            _In_ LPARAM lParam,
                                            _In_ DWORD_PTR dwRefData) {
     switch (uMsg) {
-        case WM_HOTKEY:
+        case WM_HOTKEY: {
             int hotkeyId = static_cast<int>(wParam);
             for (const auto& action : g_settings.hotkeyActions) {
                 if (action.registered && action.hotkeyId == hotkeyId) {
@@ -1447,6 +1447,7 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(_In_ HWND hWnd,
                 }
             }
             break;
+        }
 
         default:
             if (uMsg == g_hotkeyRegisteredMsg) {
