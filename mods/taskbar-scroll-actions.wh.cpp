@@ -368,8 +368,9 @@ VS_FIXEDFILEINFO* GetModuleVersionInfo(HMODULE hModule, UINT* puPtrLen) {
         }
     }
 
-    if (puPtrLen)
+    if (puPtrLen) {
         *puPtrLen = uPtrLen;
+    }
 
     return (VS_FIXEDFILEINFO*)pFixedFileInfo;
 }
@@ -378,8 +379,9 @@ BOOL WindowsVersionInit() {
     g_nWinVersion = WIN_VERSION_UNSUPPORTED;
 
     VS_FIXEDFILEINFO* pFixedFileInfo = GetModuleVersionInfo(NULL, NULL);
-    if (!pFixedFileInfo)
+    if (!pFixedFileInfo) {
         return FALSE;
+    }
 
     WORD nMajor = HIWORD(pFixedFileInfo->dwFileVersionMS);
     WORD nMinor = LOWORD(pFixedFileInfo->dwFileVersionMS);
@@ -398,10 +400,11 @@ BOOL WindowsVersionInit() {
                     break;
 
                 case 3:
-                    if (nQFE < 17000)
+                    if (nQFE < 17000) {
                         g_nWinVersion = WIN_VERSION_81;
-                    else
+                    } else {
                         g_nWinVersion = WIN_VERSION_811;
+                    }
                     break;
 
                 case 4:
@@ -411,35 +414,37 @@ BOOL WindowsVersionInit() {
             break;
 
         case 10:
-            if (nBuild <= 10240)
+            if (nBuild <= 10240) {
                 g_nWinVersion = WIN_VERSION_10_T1;
-            else if (nBuild <= 10586)
+            } else if (nBuild <= 10586) {
                 g_nWinVersion = WIN_VERSION_10_T2;
-            else if (nBuild <= 14393)
+            } else if (nBuild <= 14393) {
                 g_nWinVersion = WIN_VERSION_10_R1;
-            else if (nBuild <= 15063)
+            } else if (nBuild <= 15063) {
                 g_nWinVersion = WIN_VERSION_10_R2;
-            else if (nBuild <= 16299)
+            } else if (nBuild <= 16299) {
                 g_nWinVersion = WIN_VERSION_10_R3;
-            else if (nBuild <= 17134)
+            } else if (nBuild <= 17134) {
                 g_nWinVersion = WIN_VERSION_10_R4;
-            else if (nBuild <= 17763)
+            } else if (nBuild <= 17763) {
                 g_nWinVersion = WIN_VERSION_10_R5;
-            else if (nBuild <= 18362)
+            } else if (nBuild <= 18362) {
                 g_nWinVersion = WIN_VERSION_10_19H1;
-            else if (nBuild <= 19041)
+            } else if (nBuild <= 19041) {
                 g_nWinVersion = WIN_VERSION_10_20H1;
-            else if (nBuild <= 20348)
+            } else if (nBuild <= 20348) {
                 g_nWinVersion = WIN_VERSION_SERVER_2022;
-            else if (nBuild <= 22000)
+            } else if (nBuild <= 22000) {
                 g_nWinVersion = WIN_VERSION_11_21H2;
-            else
+            } else {
                 g_nWinVersion = WIN_VERSION_11_22H2;
+            }
             break;
     }
 
-    if (g_nWinVersion == WIN_VERSION_UNSUPPORTED)
+    if (g_nWinVersion == WIN_VERSION_UNSUPPORTED) {
         return FALSE;
+    }
 
     return TRUE;
 }
@@ -697,10 +702,12 @@ cleanup:
     SysFreeString(ClassPath);
     SysFreeString(bstrQuery);
 
-    if (pLocator)
+    if (pLocator) {
         pLocator->Release();
-    if (pNamespace)
+    }
+    if (pNamespace) {
         pNamespace->Release();
+    }
 
     CoUninitialize();
 
@@ -867,8 +874,9 @@ bool SetBrightness(int val) {
         VariantInit(&pathVariable);
 
         hr = pObj->Get(_bstr_t(L"__PATH"), 0, &pathVariable, NULL, NULL);
-        if (hr != WBEM_S_NO_ERROR)
+        if (hr != WBEM_S_NO_ERROR) {
             goto cleanup;
+        }
 
         hr = pNamespace->ExecMethod(pathVariable.bstrVal, MethodName, 0, NULL,
                                     pInInst, NULL, NULL);
@@ -889,16 +897,21 @@ cleanup:
     SysFreeString(ArgName1);
     SysFreeString(bstrQuery);
 
-    if (pClass)
+    if (pClass) {
         pClass->Release();
-    if (pInInst)
+    }
+    if (pInInst) {
         pInInst->Release();
-    if (pInClass)
+    }
+    if (pInClass) {
         pInClass->Release();
-    if (pLocator)
+    }
+    if (pLocator) {
         pLocator->Release();
-    if (pNamespace)
+    }
+    if (pNamespace) {
         pNamespace->Release();
+    }
 
     CoUninitialize();
 
@@ -986,8 +999,9 @@ void MicVolInit() {
     HRESULT hr = CoCreateInstance(
         XIID_MMDeviceEnumerator, NULL, CLSCTX_INPROC_SERVER,
         XIID_IMMDeviceEnumerator, (LPVOID*)&g_pDeviceEnumerator);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
         g_pDeviceEnumerator = NULL;
+    }
 }
 
 void MicVolUninit() {
@@ -1021,10 +1035,11 @@ BOOL AddMicMasterVolumeLevelScalar(float fMasterVolumeAdd) {
                         &fMasterVolume))) {
                     fMasterVolume += fMasterVolumeAdd;
 
-                    if (fMasterVolume < 0.0)
+                    if (fMasterVolume < 0.0) {
                         fMasterVolume = 0.0;
-                    else if (fMasterVolume > 1.0)
+                    } else if (fMasterVolume > 1.0) {
                         fMasterVolume = 1.0;
+                    }
 
                     if (SUCCEEDED(endpointVolume->SetMasterVolumeLevelScalar(
                             fMasterVolume, NULL))) {
@@ -1305,12 +1320,14 @@ HWND FindCurrentProcessTaskbarWindows(
 
             DWORD dwProcessId = 0;
             if (!GetWindowThreadProcessId(hWnd, &dwProcessId) ||
-                dwProcessId != GetCurrentProcessId())
+                dwProcessId != GetCurrentProcessId()) {
                 return TRUE;
+            }
 
             WCHAR szClassName[32];
-            if (GetClassName(hWnd, szClassName, ARRAYSIZE(szClassName)) == 0)
+            if (GetClassName(hWnd, szClassName, ARRAYSIZE(szClassName)) == 0) {
                 return TRUE;
+            }
 
             if (_wcsicmp(szClassName, L"Shell_TrayWnd") == 0) {
                 *param.hWnd = hWnd;
@@ -1342,8 +1359,9 @@ HWND WINAPI CreateWindowExW_Hook(DWORD dwExStyle,
     HWND hWnd = CreateWindowExW_Original(dwExStyle, lpClassName, lpWindowName,
                                          dwStyle, X, Y, nWidth, nHeight,
                                          hWndParent, hMenu, hInstance, lpParam);
-    if (!hWnd)
+    if (!hWnd) {
         return hWnd;
+    }
 
     BOOL bTextualClassName = ((ULONG_PTR)lpClassName & ~(ULONG_PTR)0xffff) != 0;
 
@@ -1390,8 +1408,9 @@ HWND WINAPI CreateWindowInBand_Hook(DWORD dwExStyle,
     HWND hWnd = CreateWindowInBand_Original(
         dwExStyle, lpClassName, lpWindowName, dwStyle, X, Y, nWidth, nHeight,
         hWndParent, hMenu, hInstance, lpParam, dwBand);
-    if (!hWnd)
+    if (!hWnd) {
         return hWnd;
+    }
 
     BOOL bTextualClassName = ((ULONG_PTR)lpClassName & ~(ULONG_PTR)0xffff) != 0;
 
