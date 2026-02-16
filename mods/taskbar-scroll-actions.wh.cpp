@@ -51,38 +51,42 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 
 // ==WindhawkModSettings==
 /*
-- scrollAction: virtualDesktopSwitch
-  $name: Scroll action
-  $options:
-  - virtualDesktopSwitch: Switch virtual desktop
-  - brightnessChange: Change monitor brightness
-  - micVolumeChange: Change microphone volume
-- scrollArea: taskbar
-  $name: Scroll area
-  $options:
-  - taskbar: The taskbar
-  - notificationArea: The tray area
-  - taskbarWithoutNotificationArea: The taskbar without the tray area
-  - none: None (only additional scroll regions)
-- additionalScrollRegions: ""
-  $name: Additional scroll regions
+- ScrollActions:
+  - - scrollAction: virtualDesktopSwitch
+      $name: Scroll action
+      $options:
+      - virtualDesktopSwitch: Switch virtual desktop
+      - brightnessChange: Change monitor brightness
+      - micVolumeChange: Change microphone volume
+    - scrollArea: taskbar
+      $name: Scroll area
+      $options:
+      - taskbar: The taskbar
+      - notificationArea: The tray area
+      - taskbarWithoutNotificationArea: The taskbar without the tray area
+      - none: None (only additional scroll regions)
+    - additionalScrollRegions: ""
+      $name: Additional scroll regions
+      $description: >-
+        A comma-separated list of additional regions along the taskbar where
+        scrolling will be active. Each region is a range like
+        "100-200" (pixels) or "20%-50%" (percentage of taskbar length).
+    - scrollStep: 1
+      $name: Scroll step
+      $description: >-
+        Allows to configure the change that will occur with each notch of mouse
+        wheel movement.
+    - throttleMs: 0
+      $name: Throttle time (milliseconds)
+      $description: >-
+        Prevents new actions from being triggered for this amount of time after
+        the last one. Set to 0 to disable throttling. Useful for preventing a
+        single scroll wheel 'flick' from switching multiple desktops.
+    - reverseScrollingDirection: false
+      $name: Reverse scrolling direction
+  $name: Scroll actions
   $description: >-
-    A comma-separated list of additional regions along the taskbar where
-    scrolling will be active. Each region is a range like
-    "100-200" (pixels) or "20%-50%" (percentage of taskbar length).
-- scrollStep: 1
-  $name: Scroll step
-  $description: >-
-    Allows to configure the change that will occur with each notch of mouse
-    wheel movement.
-- throttleMs: 0
-  $name: Throttle time (milliseconds)
-  $description: >-
-    Prevents new actions from being triggered for this amount of time after the
-    last one. Set to 0 to disable throttling. Useful for preventing a single
-    scroll wheel 'flick' from switching multiple desktops.
-- reverseScrollingDirection: false
-  $name: Reverse scrolling direction
+    Define one or more scroll actions for different regions of the taskbar.
 - oldTaskbarOnWin11: false
   $name: Customize the old taskbar on Windows 11
   $description: >-
@@ -104,6 +108,8 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 #include <wbemcli.h>
 #include <windowsx.h>
 
+#include <algorithm>
+#include <atomic>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -128,13 +134,17 @@ struct Region {
     int end;
 };
 
-struct {
+struct ScrollActionEntry {
     ScrollAction scrollAction;
     ScrollArea scrollArea;
     std::vector<Region> additionalScrollRegions;
     int scrollStep;
     int throttleMs;
     bool reverseScrollingDirection;
+};
+
+struct {
+    std::vector<ScrollActionEntry> scrollActions;
     bool oldTaskbarOnWin11;
 } g_settings;
 
@@ -303,8 +313,10 @@ bool GetNotificationAreaRect(HWND hMMTaskbarWnd, RECT* rcResult) {
     return true;
 }
 
-bool IsPointInsideTaskbarScrollArea(HWND hMMTaskbarWnd, POINT pt) {
-    switch (g_settings.scrollArea) {
+bool IsPointInsideTaskbarScrollArea(HWND hMMTaskbarWnd,
+                                    POINT pt,
+                                    ScrollArea scrollArea) {
+    switch (scrollArea) {
         case ScrollArea::taskbar: {
             RECT rc;
             return GetWindowRect(hMMTaskbarWnd, &rc) && PtInRect(&rc, pt);
@@ -521,8 +533,10 @@ std::optional<Region> ParseRegion(std::wstring_view regionStr) {
     return Region{isPercentage, start, end};
 }
 
-bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd, POINT pt) {
-    if (g_settings.additionalScrollRegions.empty()) {
+bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd,
+                                   POINT pt,
+                                   const std::vector<Region>& regions) {
+    if (regions.empty()) {
         return false;
     }
 
@@ -544,7 +558,7 @@ bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd, POINT pt) {
 
     UINT dpi = GetDpiForWindowWithFallback(hMMTaskbarWnd);
 
-    for (const auto& region : g_settings.additionalScrollRegions) {
+    for (const auto& region : regions) {
         int start, end;
         if (region.isPercentage) {
             start = MulDiv(taskbarLength, region.start, 100);
@@ -562,9 +576,13 @@ bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd, POINT pt) {
     return false;
 }
 
-bool IsPointInsideScrollArea(HWND hMMTaskbarWnd, POINT pt) {
-    return IsPointInsideTaskbarScrollArea(hMMTaskbarWnd, pt) ||
-           IsPointInsideAdditionalRegion(hMMTaskbarWnd, pt);
+bool IsPointInsideEntryScrollArea(HWND hMMTaskbarWnd,
+                                  POINT pt,
+                                  const ScrollActionEntry& entry) {
+    return IsPointInsideTaskbarScrollArea(hMMTaskbarWnd, pt,
+                                          entry.scrollArea) ||
+           IsPointInsideAdditionalRegion(hMMTaskbarWnd, pt,
+                                         entry.additionalScrollRegions);
 }
 
 #pragma endregion  // regions
@@ -1029,11 +1047,19 @@ BOOL AddMicMasterVolumeLevelScalar(float fMasterVolumeAdd) {
 DWORD g_lastScrollTime;
 int g_lastScrollDeltaRemainder;
 DWORD g_lastActionTime;
+int g_lastScrollActionIndex = -1;
 
-void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam) {
-    int delta = GET_WHEEL_DELTA_WPARAM(wParam) * g_settings.scrollStep;
+void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam, int entryIndex) {
+    const auto& entry = g_settings.scrollActions[entryIndex];
 
-    if (g_settings.reverseScrollingDirection) {
+    if (entryIndex != g_lastScrollActionIndex) {
+        g_lastScrollDeltaRemainder = 0;
+        g_lastScrollActionIndex = entryIndex;
+    }
+
+    int delta = GET_WHEEL_DELTA_WPARAM(wParam) * entry.scrollStep;
+
+    if (entry.reverseScrollingDirection) {
         delta = -delta;
     }
 
@@ -1044,8 +1070,8 @@ void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam) {
     int clicks = delta / WHEEL_DELTA;
     Wh_Log(L"%d clicks (delta=%d)", clicks, delta);
 
-    if (clicks != 0 && g_settings.throttleMs > 0) {
-        if (GetTickCount() - g_lastActionTime < (DWORD)g_settings.throttleMs) {
+    if (clicks != 0 && entry.throttleMs > 0) {
+        if (GetTickCount() - g_lastActionTime < (DWORD)entry.throttleMs) {
             // It's too soon, ignore this scroll event.
             clicks = 0;
 
@@ -1061,7 +1087,7 @@ void InvokeScrollAction(WPARAM wParam, LPARAM lMousePosParam) {
     }
 
     if (clicks != 0) {
-        switch (g_settings.scrollAction) {
+        switch (entry.scrollAction) {
             case ScrollAction::virtualDesktopSwitch:
                 SwitchDesktopViaKeyboardShortcut(clicks);
                 break;
@@ -1105,18 +1131,20 @@ bool OnMouseWheel(HWND hWnd, WPARAM wParam, LPARAM lParam) {
     pt.x = GET_X_LPARAM(lParam);
     pt.y = GET_Y_LPARAM(lParam);
 
-    if (!IsPointInsideScrollArea(hWnd, pt)) {
-        return false;
+    for (int i = 0; i < (int)g_settings.scrollActions.size(); i++) {
+        if (IsPointInsideEntryScrollArea(hWnd, pt,
+                                         g_settings.scrollActions[i])) {
+            // Allows to steal focus.
+            INPUT input;
+            ZeroMemory(&input, sizeof(INPUT));
+            SendInput(1, &input, sizeof(INPUT));
+
+            InvokeScrollAction(wParam, lParam, i);
+            return true;
+        }
     }
 
-    // Allows to steal focus.
-    INPUT input;
-    ZeroMemory(&input, sizeof(INPUT));
-    SendInput(1, &input, sizeof(INPUT));
-
-    InvokeScrollAction(wParam, lParam);
-
-    return true;
+    return false;
 }
 
 LRESULT CALLBACK TaskbarWindowSubclassProc(_In_ HWND hWnd,
@@ -1380,44 +1408,63 @@ HWND WINAPI CreateWindowInBand_Hook(DWORD dwExStyle,
 }
 
 void LoadSettings() {
-    PCWSTR scrollAction = Wh_GetStringSetting(L"scrollAction");
-    g_settings.scrollAction = ScrollAction::virtualDesktopSwitch;
-    if (wcscmp(scrollAction, L"brightnessChange") == 0) {
-        g_settings.scrollAction = ScrollAction::brightnessChange;
-    } else if (wcscmp(scrollAction, L"micVolumeChange") == 0) {
-        g_settings.scrollAction = ScrollAction::micVolumeChange;
-    }
-    Wh_FreeStringSetting(scrollAction);
+    g_settings.scrollActions.clear();
 
-    PCWSTR scrollArea = Wh_GetStringSetting(L"scrollArea");
-    g_settings.scrollArea = ScrollArea::taskbar;
-    if (wcscmp(scrollArea, L"notificationArea") == 0) {
-        g_settings.scrollArea = ScrollArea::notificationArea;
-    } else if (wcscmp(scrollArea, L"taskbarWithoutNotificationArea") == 0) {
-        g_settings.scrollArea = ScrollArea::taskbarWithoutNotificationArea;
-    } else if (wcscmp(scrollArea, L"none") == 0) {
-        g_settings.scrollArea = ScrollArea::none;
-    }
-    Wh_FreeStringSetting(scrollArea);
+    for (int i = 0;; i++) {
+        PCWSTR scrollAction =
+            Wh_GetStringSetting(L"ScrollActions[%d].scrollAction", i);
+        PCWSTR scrollArea =
+            Wh_GetStringSetting(L"ScrollActions[%d].scrollArea", i);
+        bool hasEntry = *scrollAction || *scrollArea;
 
-    g_settings.additionalScrollRegions.clear();
-    PCWSTR additionalScrollRegions =
-        Wh_GetStringSetting(L"additionalScrollRegions");
-    for (auto regionStr : SplitStringView(additionalScrollRegions, L",")) {
-        regionStr = TrimStringView(regionStr);
-        if (regionStr.empty()) {
-            continue;
+        if (!hasEntry) {
+            Wh_FreeStringSetting(scrollAction);
+            Wh_FreeStringSetting(scrollArea);
+            break;
         }
-        if (auto region = ParseRegion(regionStr)) {
-            g_settings.additionalScrollRegions.push_back(*region);
-        }
-    }
-    Wh_FreeStringSetting(additionalScrollRegions);
 
-    g_settings.scrollStep = Wh_GetIntSetting(L"scrollStep");
-    g_settings.throttleMs = Wh_GetIntSetting(L"throttleMs");
-    g_settings.reverseScrollingDirection =
-        Wh_GetIntSetting(L"reverseScrollingDirection");
+        ScrollActionEntry entry{};
+
+        entry.scrollAction = ScrollAction::virtualDesktopSwitch;
+        if (wcscmp(scrollAction, L"brightnessChange") == 0) {
+            entry.scrollAction = ScrollAction::brightnessChange;
+        } else if (wcscmp(scrollAction, L"micVolumeChange") == 0) {
+            entry.scrollAction = ScrollAction::micVolumeChange;
+        }
+        Wh_FreeStringSetting(scrollAction);
+
+        entry.scrollArea = ScrollArea::taskbar;
+        if (wcscmp(scrollArea, L"notificationArea") == 0) {
+            entry.scrollArea = ScrollArea::notificationArea;
+        } else if (wcscmp(scrollArea, L"taskbarWithoutNotificationArea") == 0) {
+            entry.scrollArea = ScrollArea::taskbarWithoutNotificationArea;
+        } else if (wcscmp(scrollArea, L"none") == 0) {
+            entry.scrollArea = ScrollArea::none;
+        }
+        Wh_FreeStringSetting(scrollArea);
+
+        PCWSTR additionalScrollRegions = Wh_GetStringSetting(
+            L"ScrollActions[%d].additionalScrollRegions", i);
+        for (auto regionStr : SplitStringView(additionalScrollRegions, L",")) {
+            regionStr = TrimStringView(regionStr);
+            if (regionStr.empty()) {
+                continue;
+            }
+            if (auto region = ParseRegion(regionStr)) {
+                entry.additionalScrollRegions.push_back(*region);
+            }
+        }
+        Wh_FreeStringSetting(additionalScrollRegions);
+
+        entry.scrollStep =
+            std::max(1, Wh_GetIntSetting(L"ScrollActions[%d].scrollStep", i));
+        entry.throttleMs = Wh_GetIntSetting(L"ScrollActions[%d].throttleMs", i);
+        entry.reverseScrollingDirection =
+            Wh_GetIntSetting(L"ScrollActions[%d].reverseScrollingDirection", i);
+
+        g_settings.scrollActions.push_back(std::move(entry));
+    }
+
     g_settings.oldTaskbarOnWin11 = Wh_GetIntSetting(L"oldTaskbarOnWin11");
 }
 
