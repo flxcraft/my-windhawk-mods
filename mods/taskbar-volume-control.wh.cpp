@@ -2,7 +2,7 @@
 // @id              taskbar-volume-control
 // @name            Taskbar Volume Control
 // @description     Control the system volume by scrolling over the taskbar or anywhere with modifier keys
-// @version         1.2.2
+// @version         1.3
 // @author          m417z
 // @github          https://github.com/m417z
 // @twitter         https://twitter.com/m417z
@@ -32,9 +32,9 @@ Features:
 * **Volume indicator**: Choose between Windows 11, Windows 10, Windows 7, or no
   indicator.
 * **Scroll area**: Limit scrolling to the full taskbar, the tray area, or define
-  custom regions along the taskbar (e.g. 80%-100%).
-* **Scroll anywhere**: Hold a configurable combination of modifier keys
-  (Shift/Ctrl/Alt/Win) to control the volume by scrolling anywhere on screen.
+  custom regions along the taskbar.
+* **Scroll anywhere**: Hold a configurable combination of modifier keys to
+  control the volume by scrolling anywhere on screen.
 * **Full screen scrolling**: Scroll at the taskbar position to control the
   volume even when a full screen window covers the taskbar.
 * **Middle click to mute**: Middle click the volume tray icon to toggle mute.
@@ -92,16 +92,16 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
     When enabled, scrolling the mouse wheel will only change the volume when
     the Ctrl key is held down.
 - scrollAnywhereKeys:
-  - Shift: false
-  - Ctrl: false
-  - Alt: false
-  - Win: false
+  - shift: false
+  - ctrl: false
+  - alt: false
+  - win: false
   $name: Scroll anywhere modifier keys
   $description: >-
     A combination of modifier keys that, when held, allow controlling the system
-    volume by scrolling the mouse wheel anywhere on screen. Note that scrolling
-    won't work when the foreground window is of an elevated process (such as
-    Windhawk or Task Manager).
+    volume by scrolling the mouse wheel anywhere on the screen. Note that
+    scrolling won't work when the foreground window is of an elevated process
+    (such as Windhawk or Task Manager).
 - fullScreenScrolling: disabled
   $name: Full screen scrolling
   $description: >-
@@ -143,6 +143,7 @@ issue](https://tweaker.userecho.com/topics/826-scroll-on-trackpadtouchpad-doesnt
 #include <psapi.h>
 #include <windowsx.h>
 
+#include <algorithm>
 #include <atomic>
 #include <optional>
 #include <string_view>
@@ -163,6 +164,12 @@ enum class ScrollArea {
     none,
 };
 
+struct Region {
+    bool isPercentage;
+    int start;
+    int end;
+};
+
 enum class FullScreenScrolling {
     disabled,
     withIndicator,
@@ -172,6 +179,7 @@ enum class FullScreenScrolling {
 struct {
     VolumeIndicator volumeIndicator;
     ScrollArea scrollArea;
+    std::vector<Region> additionalScrollRegions;
     bool middleClickToMute;
     bool ctrlScrollVolumeChange;
     struct {
@@ -484,14 +492,6 @@ BOOL WindowsVersionInit() {
 
 #pragma region regions
 
-struct Region {
-    bool isPercentage;
-    int start;
-    int end;
-};
-
-std::vector<Region> g_regions;
-
 // https://stackoverflow.com/a/54364173
 std::wstring_view TrimStringView(std::wstring_view s) {
     s.remove_prefix(std::min(s.find_first_not_of(L" \t\r\v\n"), s.size()));
@@ -578,7 +578,7 @@ std::optional<Region> ParseRegion(std::wstring_view regionStr) {
 }
 
 bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd, POINT pt) {
-    if (g_regions.empty()) {
+    if (g_settings.additionalScrollRegions.empty()) {
         return false;
     }
 
@@ -600,7 +600,7 @@ bool IsPointInsideAdditionalRegion(HWND hMMTaskbarWnd, POINT pt) {
 
     UINT dpi = GetDpiForWindowWithFallback(hMMTaskbarWnd);
 
-    for (const auto& region : g_regions) {
+    for (const auto& region : g_settings.additionalScrollRegions) {
         int start, end;
         if (region.isPercentage) {
             start = MulDiv(taskbarLength, region.start, 100);
@@ -1425,65 +1425,6 @@ static BOOL CALLBACK EnumThreadFindSndVolTrayControlWnd(HWND hWnd,
 
 ////////////////////////////////////////////////////////////
 
-// wParam - TRUE to subclass, FALSE to unsubclass
-// lParam - subclass data
-UINT g_subclassRegisteredMsg = RegisterWindowMessage(
-    L"Windhawk_SetWindowSubclassFromAnyThread_" WH_MOD_ID);
-
-BOOL SetWindowSubclassFromAnyThread(HWND hWnd,
-                                    SUBCLASSPROC pfnSubclass,
-                                    UINT_PTR uIdSubclass,
-                                    DWORD_PTR dwRefData) {
-    struct SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM {
-        SUBCLASSPROC pfnSubclass;
-        UINT_PTR uIdSubclass;
-        DWORD_PTR dwRefData;
-        BOOL result;
-    };
-
-    DWORD dwThreadId = GetWindowThreadProcessId(hWnd, nullptr);
-    if (dwThreadId == 0) {
-        return FALSE;
-    }
-
-    if (dwThreadId == GetCurrentThreadId()) {
-        return SetWindowSubclass(hWnd, pfnSubclass, uIdSubclass, dwRefData);
-    }
-
-    HHOOK hook = SetWindowsHookEx(
-        WH_CALLWNDPROC,
-        [](int nCode, WPARAM wParam,
-           LPARAM lParam) WINAPI_LAMBDA_RETURN(LRESULT) {
-            if (nCode == HC_ACTION) {
-                const CWPSTRUCT* cwp = (const CWPSTRUCT*)lParam;
-                if (cwp->message == g_subclassRegisteredMsg && cwp->wParam) {
-                    SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM* param =
-                        (SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM*)cwp->lParam;
-                    param->result =
-                        SetWindowSubclass(cwp->hwnd, param->pfnSubclass,
-                                          param->uIdSubclass, param->dwRefData);
-                }
-            }
-
-            return CallNextHookEx(nullptr, nCode, wParam, lParam);
-        },
-        nullptr, dwThreadId);
-    if (!hook) {
-        return FALSE;
-    }
-
-    SET_WINDOW_SUBCLASS_FROM_ANY_THREAD_PARAM param;
-    param.pfnSubclass = pfnSubclass;
-    param.uIdSubclass = uIdSubclass;
-    param.dwRefData = dwRefData;
-    param.result = FALSE;
-    SendMessage(hWnd, g_subclassRegisteredMsg, TRUE, (LPARAM)&param);
-
-    UnhookWindowsHookEx(hook);
-
-    return param.result;
-}
-
 bool OnMouseWheel(HWND hWnd, WPARAM wParam, LPARAM lParam) {
     if (GetCapture()) {
         return false;
@@ -1515,12 +1456,7 @@ LRESULT CALLBACK TaskbarWindowSubclassProc(_In_ HWND hWnd,
                                            _In_ UINT uMsg,
                                            _In_ WPARAM wParam,
                                            _In_ LPARAM lParam,
-                                           _In_ UINT_PTR uIdSubclass,
                                            _In_ DWORD_PTR dwRefData) {
-    if (uMsg == WM_NCDESTROY || (uMsg == g_subclassRegisteredMsg && !wParam)) {
-        RemoveWindowSubclass(hWnd, TaskbarWindowSubclassProc, 0);
-    }
-
     LRESULT result = 0;
 
     switch (uMsg) {
@@ -1621,11 +1557,13 @@ LRESULT CALLBACK InputSiteWindowProc_Hook(HWND hWnd,
 }
 
 void SubclassTaskbarWindow(HWND hWnd) {
-    SetWindowSubclassFromAnyThread(hWnd, TaskbarWindowSubclassProc, 0, 0);
+    WindhawkUtils::SetWindowSubclassFromAnyThread(hWnd,
+                                                  TaskbarWindowSubclassProc, 0);
 }
 
 void UnsubclassTaskbarWindow(HWND hWnd) {
-    SendMessage(hWnd, g_subclassRegisteredMsg, FALSE, 0);
+    WindhawkUtils::RemoveWindowSubclassFromAnyThread(hWnd,
+                                                     TaskbarWindowSubclassProc);
 }
 
 void HandleIdentifiedInputSiteWindow(HWND hWnd) {
@@ -1828,15 +1766,14 @@ HWND WINAPI CreateWindowInBand_Hook(DWORD dwExStyle,
     return hWnd;
 }
 
-using ForceFocusBasedMouseWheelRouting_t = DWORD_PTR(WINAPI*)(BOOL);
+using ForceFocusBasedMouseWheelRouting_t = DWORD_PTR(WINAPI*)(BOOL enabled);
 ForceFocusBasedMouseWheelRouting_t ForceFocusBasedMouseWheelRouting_Original;
 DWORD_PTR WINAPI ForceFocusBasedMouseWheelRouting_Hook(BOOL enabled) {
     Wh_Log(L">");
 
     // Always disable to prevent the volume control from stealing mouse wheel
     // messages.
-    enabled = FALSE;
-    return ForceFocusBasedMouseWheelRouting_Original(enabled);
+    return ForceFocusBasedMouseWheelRouting_Original(FALSE);
 }
 
 void LoadSettings() {
@@ -1871,13 +1808,13 @@ void LoadSettings() {
     g_settings.ctrlScrollVolumeChange =
         Wh_GetIntSetting(L"ctrlScrollVolumeChange");
     g_settings.scrollAnywhereKeys.shift =
-        Wh_GetIntSetting(L"scrollAnywhereKeys.Shift");
+        Wh_GetIntSetting(L"scrollAnywhereKeys.shift");
     g_settings.scrollAnywhereKeys.ctrl =
-        Wh_GetIntSetting(L"scrollAnywhereKeys.Ctrl");
+        Wh_GetIntSetting(L"scrollAnywhereKeys.ctrl");
     g_settings.scrollAnywhereKeys.alt =
-        Wh_GetIntSetting(L"scrollAnywhereKeys.Alt");
+        Wh_GetIntSetting(L"scrollAnywhereKeys.alt");
     g_settings.scrollAnywhereKeys.win =
-        Wh_GetIntSetting(L"scrollAnywhereKeys.Win");
+        Wh_GetIntSetting(L"scrollAnywhereKeys.win");
 
     PCWSTR fullScreenScrolling = Wh_GetStringSetting(L"fullScreenScrolling");
     g_settings.fullScreenScrolling = FullScreenScrolling::disabled;
@@ -1893,7 +1830,7 @@ void LoadSettings() {
     g_settings.volumeChangeStep = Wh_GetIntSetting(L"volumeChangeStep");
     g_settings.oldTaskbarOnWin11 = Wh_GetIntSetting(L"oldTaskbarOnWin11");
 
-    g_regions.clear();
+    g_settings.additionalScrollRegions.clear();
     PCWSTR additionalScrollRegions =
         Wh_GetStringSetting(L"additionalScrollRegions");
     for (auto regionStr : SplitStringView(additionalScrollRegions, L",")) {
@@ -1902,7 +1839,7 @@ void LoadSettings() {
             continue;
         }
         if (auto region = ParseRegion(regionStr)) {
-            g_regions.push_back(*region);
+            g_settings.additionalScrollRegions.push_back(*region);
         }
     }
     Wh_FreeStringSetting(additionalScrollRegions);
