@@ -8,7 +8,7 @@
 // @twitter         https://twitter.com/m417z
 // @homepage        https://m417z.com/
 // @include         *
-// @compilerOptions -lcomctl32 -lole32 -loleaut32
+// @compilerOptions -lcomctl32 -lgdi32 -lole32 -loleaut32
 // ==/WindhawkMod==
 
 // Source code is published under The GNU General Public License v3.0.
@@ -1088,11 +1088,46 @@ HANDLE LoadImageAW_Hook(HINSTANCE hInst,
 
     HANDLE result;
     bool redirected;
+    DWORD lastError = 0;
 
     auto beforeFirstRedirectionFunction = [&]() {
         Wh_Log(L"[%u] Width: %d", c, cx);
         Wh_Log(L"[%u] Height: %d", c, cy);
         Wh_Log(L"[%u] Flags: 0x%08X", c, fuLoad);
+    };
+
+    // If `LR_EXACTSIZEONLY` is used and the exact size is missing, the function
+    // will return no result. If the replacement doesn't have this resource, we
+    // want to fall back to the original, but if it has other sizes, we prefer
+    // to return an error, hopefully the target app will try other sizes in this
+    // case.
+    auto handleExactSizeOnlyMiss =
+        [&](DWORD dwError, std::function<HANDLE(UINT)> loadFunc) -> bool {
+        if (!(fuLoad & LR_EXACTSIZEONLY) ||
+            (type != IMAGE_BITMAP && type != IMAGE_ICON &&
+             type != IMAGE_CURSOR)) {
+            return false;
+        }
+
+        HANDLE testResult = loadFunc(fuLoad & ~LR_EXACTSIZEONLY);
+        if (!testResult) {
+            return false;
+        }
+
+        if (!(fuLoad & LR_SHARED)) {
+            if (type == IMAGE_BITMAP) {
+                DeleteObject(testResult);
+            } else if (type == IMAGE_ICON) {
+                DestroyIcon((HICON)testResult);
+            } else {
+                DestroyCursor((HCURSOR)testResult);
+            }
+        }
+
+        result = nullptr;
+        lastError = dwError;
+        Wh_Log(L"[%u] Redirected successfully with error for exact size", c);
+        return true;
     };
 
     if (!hInst && (fuLoad & LR_LOADFROMFILE)) {
@@ -1107,6 +1142,14 @@ HANDLE LoadImageAW_Hook(HINSTANCE hInst,
                 }
 
                 DWORD dwError = GetLastError();
+
+                if (handleExactSizeOnlyMiss(dwError, [&](UINT flags) {
+                        return (*Original)(hInst, fileNameRedirect, type, cx,
+                                           cy, flags);
+                    })) {
+                    return true;
+                }
+
                 Wh_Log(L"[%u] LoadImage failed with error %u", c, dwError);
                 return false;
             });
@@ -1122,12 +1165,23 @@ HANDLE LoadImageAW_Hook(HINSTANCE hInst,
                 }
 
                 DWORD dwError = GetLastError();
+
+                if (handleExactSizeOnlyMiss(dwError, [&](UINT flags) {
+                        return (*Original)(hInstanceRedirect, name, type, cx,
+                                           cy, flags);
+                    })) {
+                    return true;
+                }
+
                 Wh_Log(L"[%u] LoadImage failed with error %u", c, dwError);
                 return false;
             });
     }
 
     if (redirected) {
+        if (!result) {
+            SetLastError(lastError);
+        }
         return result;
     }
 
