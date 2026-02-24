@@ -1,6 +1,8 @@
 BasedOnStyle: Chromium
 IndentWidth: 4
-CommentPragmas: ^[ \t]+@[a-zA-Z]+
+CommentPragmas: "^[ \\t]+@[a-zA-Z]+\
+  |^const s=document\\.createElement\\('script'\\);.*;$\
+  |^Found display device .*, interface name: .*\\}$"
 
 # Custom rules.
 InsertBraces: true
