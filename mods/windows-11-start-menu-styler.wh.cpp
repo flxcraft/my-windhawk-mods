@@ -5277,25 +5277,37 @@ HRESULT InjectWindhawkTAP() noexcept
 
 using namespace std::string_view_literals;
 
+#include <initguid.h>
+
 #include <commctrl.h>
+#include <d2d1_1.h>
 #include <roapi.h>
+#include <windows.graphics.effects.h>
 #include <winstring.h>
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.Networking.Connectivity.h>
 #include <winrt/Windows.Storage.Streams.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.UI.Composition.h>
 #include <winrt/Windows.UI.Core.h>
 #include <winrt/Windows.UI.Text.h>
 #include <winrt/Windows.UI.ViewManagement.h>
 #include <winrt/Windows.UI.Xaml.Controls.h>
+#include <winrt/Windows.UI.Xaml.Hosting.h>
 #include <winrt/Windows.UI.Xaml.Markup.h>
 #include <winrt/Windows.UI.Xaml.Media.Imaging.h>
 #include <winrt/Windows.UI.Xaml.Media.h>
 #include <winrt/Windows.UI.Xaml.h>
 
 using namespace winrt::Windows::UI::Xaml;
+
+namespace wge = winrt::Windows::Graphics::Effects;
+namespace wuc = winrt::Windows::UI::Composition;
+namespace wuxh = wux::Hosting;
+namespace awge = ABI::Windows::Graphics::Effects;
 
 enum class Target {
     StartMenu,
@@ -5589,22 +5601,9 @@ winrt::Windows::Storage::Streams::IRandomAccessStream CreateNoiseStream(
 // Blur background implementation, copied from TranslucentTB.
 ////////////////////////////////////////////////////////////////////////////////
 // clang-format off
-
-#include <initguid.h>
-
-#include <winrt/Windows.UI.Xaml.Hosting.h>
-
-namespace wge = winrt::Windows::Graphics::Effects;
-namespace wuc = winrt::Windows::UI::Composition;
-namespace wuxh = wux::Hosting;
-
 template <> inline constexpr winrt::guid winrt::impl::guid_v<winrt::impl::abi_t<winrt::Windows::Foundation::IPropertyValue>>{
     winrt::impl::guid_v<winrt::Windows::Foundation::IPropertyValue>
 };
-
-#ifndef E_BOUNDS
-#define E_BOUNDS (HRESULT)(0x8000000BL)
-#endif
 
 typedef enum MY_D2D1_GAUSSIANBLUR_OPTIMIZATION
 {
@@ -5617,11 +5616,6 @@ typedef enum MY_D2D1_GAUSSIANBLUR_OPTIMIZATION
 
 ////////////////////////////////////////////////////////////////////////////////
 // XamlBlurBrush.h
-#include <winrt/Windows.Foundation.Numerics.h>
-#include <winrt/Windows.UI.Composition.h>
-#include <winrt/Windows.UI.Xaml.Media.h>
-#include <winrt/Windows.UI.ViewManagement.h>
-
 class XamlBlurBrush : public wux::Media::XamlCompositionBrushBaseT<XamlBlurBrush>
 {
 public:
@@ -5655,16 +5649,7 @@ private:
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// CompositeEffect.h
-#include <d2d1effects.h>
-#include <d2d1_1.h>
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Graphics.Effects.h>
-// #include <windows.graphics.effects.interop.h>
-
-#include <windows.graphics.effects.h>
-#include <sdkddkver.h>
-
+// windows.graphics.effects.interop.h
 #ifndef BUILD_WINDOWS
 namespace ABI {
 #endif
@@ -5748,9 +5733,8 @@ template <> inline constexpr winrt::guid winrt::impl::guid_v<ABI::Windows::Graph
 };
 
 
-
-namespace awge = ABI::Windows::Graphics::Effects;
-
+////////////////////////////////////////////////////////////////////////////////
+// CompositeEffect.h
 struct CompositeEffect : winrt::implements<CompositeEffect, wge::IGraphicsEffect, wge::IGraphicsEffectSource, awge::IGraphicsEffectD2D1Interop>
 {
 public:
@@ -5877,14 +5861,6 @@ void CompositeEffect::Name(winrt::hstring name)
 
 ////////////////////////////////////////////////////////////////////////////////
 // FloodEffect.h
-#include <d2d1effects.h>
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Foundation.Numerics.h>
-#include <winrt/Windows.Graphics.Effects.h>
-// #include <windows.graphics.effects.interop.h>
-
-namespace awge = ABI::Windows::Graphics::Effects;
-
 struct FloodEffect : winrt::implements<FloodEffect, wge::IGraphicsEffect, wge::IGraphicsEffectSource, awge::IGraphicsEffectD2D1Interop>
 {
 public:
@@ -6150,14 +6126,6 @@ void BorderEffect::Name(winrt::hstring name)
 
 ////////////////////////////////////////////////////////////////////////////////
 // GaussianBlurEffect.h
-#include <d2d1effects.h>
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Graphics.Effects.h>
-// #include <windows.graphics.effects.interop.h>
-
-namespace wge = winrt::Windows::Graphics::Effects;
-namespace awge = ABI::Windows::Graphics::Effects;
-
 struct GaussianBlurEffect : winrt::implements<GaussianBlurEffect, wge::IGraphicsEffect, wge::IGraphicsEffectSource, awge::IGraphicsEffectD2D1Interop>
 {
 public:
@@ -6312,8 +6280,6 @@ void GaussianBlurEffect::Name(winrt::hstring name)
 
 ////////////////////////////////////////////////////////////////////////////////
 // ColorMatrixEffect.h
-#include <d2d1effects.h>
-
 struct ColorMatrixEffect : winrt::implements<ColorMatrixEffect, wge::IGraphicsEffect, wge::IGraphicsEffectSource, awge::IGraphicsEffectD2D1Interop>
 {
 public:
@@ -6478,8 +6444,6 @@ void ColorMatrixEffect::Name(winrt::hstring name)
 
 ////////////////////////////////////////////////////////////////////////////////
 // XamlBlurBrush.cpp
-#include <winrt/Windows.System.h>
-
 XamlBlurBrush::XamlBlurBrush(wuc::Compositor compositor,
                              float blurAmount,
                              winrt::Windows::UI::Color tint,
