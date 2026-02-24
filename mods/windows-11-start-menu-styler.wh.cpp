@@ -6877,12 +6877,14 @@ void SetOrClearValue(DependencyObject elementDo,
                      property = std::move(property),
                      value = std::move(value)]() {
                         Wh_Log(L"Running delayed SetValue for AllAppsRoot");
+                        g_elementPropertyModifying = true;
                         try {
                             elementDo.SetValue(property, value);
                         } catch (winrt::hresult_error const& ex) {
                             Wh_Log(L"Error %08X: %s", ex.code(),
                                    ex.message().c_str());
                         }
+                        g_elementPropertyModifying = false;
                         g_delayedAllAppsRootVisibilitySet = nullptr;
                     });
             return;

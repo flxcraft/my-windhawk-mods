@@ -5811,12 +5811,14 @@ void SetOrClearValue(DependencyObject elementDo,
                 [elementDo = std::move(elementDo),
                  property = std::move(property), value = std::move(value)]() {
                     Wh_Log(L"Running delayed SetValue for BackgroundFill");
+                    g_elementPropertyModifying = true;
                     try {
                         elementDo.SetValue(property, value);
                     } catch (winrt::hresult_error const& ex) {
                         Wh_Log(L"Error %08X: %s", ex.code(),
                                ex.message().c_str());
                     }
+                    g_elementPropertyModifying = false;
                     std::erase_if(g_delayedBackgroundFillSet,
                                   [&elementDo](const auto& it) {
                                       if (auto elementDoIter = it.first.get()) {
