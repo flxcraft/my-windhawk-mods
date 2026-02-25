@@ -2410,6 +2410,7 @@ thread_local std::unordered_map<std::wstring,
 
 // Track our merged theme dictionary for cleanup (per-thread).
 thread_local ResourceDictionary g_resourceVariablesThemeDict{nullptr};
+thread_local bool g_resourceVariablesThemeDictMerged = false;
 
 // Track theme resource entries that reference {ThemeResource ...} for refresh
 // (per-thread).
@@ -4705,6 +4706,15 @@ void RestoreCustomizationsForVisualStateGroup(
 void ApplyCustomizations(InstanceHandle handle,
                          FrameworkElement element,
                          PCWSTR fallbackClassName) {
+    // Merge resource dictionary on first element add. Merging it eariler on
+    // window creation doesn't work, perhaps merged dictionaries are reset
+    // during initialization.
+    if (!g_resourceVariablesThemeDictMerged) {
+        auto resources = Application::Current().Resources();
+        resources.MergedDictionaries().Append(g_resourceVariablesThemeDict);
+        g_resourceVariablesThemeDictMerged = true;
+    }
+
     auto overrides = FindElementPropertyOverrides(element, fallbackClassName);
     if (overrides.empty()) {
         return;
@@ -5336,7 +5346,6 @@ void ProcessResourceVariablesFromSettings() {
             winrt::box_value(L"Dark"), darkDict);
         g_resourceVariablesThemeDict.ThemeDictionaries().Insert(
             winrt::box_value(L"Light"), lightDict);
-        resources.MergedDictionaries().Append(g_resourceVariablesThemeDict);
     }
 
     // Register for color changes to refresh theme resource references.
@@ -5375,10 +5384,13 @@ void UninitializeResourceVariables() {
 
     // Remove our merged theme dictionary.
     if (g_resourceVariablesThemeDict) {
-        auto merged = resources.MergedDictionaries();
-        uint32_t index;
-        if (merged.IndexOf(g_resourceVariablesThemeDict, index)) {
-            merged.RemoveAt(index);
+        if (g_resourceVariablesThemeDictMerged) {
+            auto merged = resources.MergedDictionaries();
+            uint32_t index;
+            if (merged.IndexOf(g_resourceVariablesThemeDict, index)) {
+                merged.RemoveAt(index);
+            }
+            g_resourceVariablesThemeDictMerged = false;
         }
         g_resourceVariablesThemeDict = nullptr;
     }
