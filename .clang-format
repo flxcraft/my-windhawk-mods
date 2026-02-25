@@ -2,7 +2,8 @@ BasedOnStyle: Chromium
 IndentWidth: 4
 CommentPragmas: "^[ \\t]+@[a-zA-Z]+\
   |^const s=document\\.createElement\\('script'\\);.*;$\
-  |^Found display device .*, interface name: .*\\}$"
+  |^Found display device .*, interface name: .*\\}$\
+  |^#### Calendar and notification titlebars: titles on the right, buttons on the left$"
 
 # Custom rules.
 InsertBraces: true
