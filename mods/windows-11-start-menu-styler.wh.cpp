@@ -5490,6 +5490,16 @@ thread_local winrt::event_token g_colorValuesChangedToken;
 winrt::Windows::Foundation::IInspectable ReadLocalValueWithWorkaround(
     DependencyObject elementDo,
     DependencyProperty property) {
+    // Workaround for AcrylicBrushes returning an incorrect background brush.
+    // When restored, it doesn't look correct, but if cleared, it looks correct.
+    if (property == Controls::Border::BackgroundProperty()) {
+        auto border = elementDo.try_as<Controls::Border>();
+        if (border && border.Name() == L"AcrylicBorder") {
+            Wh_Log(L"Returning unset property value for AcrylicBorder");
+            return DependencyProperty::UnsetValue();
+        }
+    }
+
     auto value = elementDo.ReadLocalValue(property);
     if (value) {
         auto className = winrt::get_class_name(value);
