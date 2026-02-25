@@ -294,7 +294,8 @@ from the **TranslucentTB** project.
   $options:
   - 0: Don't disable (use Windows default)
   - 1: Disable new layout and Phone Link
-  - 2: Disable new layout but keep Phone Link
+  - disableNewLayoutKeepPhoneLink: Disable new layout but keep Phone Link
+  - forceNewLayout: Force new layout (if available)
 - controlStyles:
   - - target: ""
       $name: Target
@@ -5428,9 +5429,10 @@ winrt::Windows::Foundation::IAsyncOperation<bool>
     g_delayedAllAppsRootVisibilitySet;
 
 enum class DisableNewStartMenuLayout {
-    dontDisable,
+    windowsDefault,
     disableNewLayoutAndPhoneLink,
     disableNewLayoutKeepPhoneLink,
+    forceNewLayout,
 };
 
 DisableNewStartMenuLayout g_disableNewStartMenuLayout;
@@ -9249,8 +9251,13 @@ int NTAPI RtlQueryFeatureConfiguration_Hook(UINT32 featureId,
         // Disable the Start Menu Phone Link layout feature.
         // https://winaero.com/enable-phone-link-flyout-start-menu/
         case 48697323:
+            Wh_Log(L"%u", featureId);
             if (g_disableNewStartMenuLayout ==
-                DisableNewStartMenuLayout::disableNewLayoutAndPhoneLink) {
+                DisableNewStartMenuLayout::forceNewLayout) {
+                config->enabledState = FEATURE_ENABLED_STATE_ENABLED;
+            } else if (g_disableNewStartMenuLayout ==
+                       DisableNewStartMenuLayout::
+                           disableNewLayoutAndPhoneLink) {
                 config->enabledState = FEATURE_ENABLED_STATE_DISABLED;
             }
             break;
@@ -9260,7 +9267,13 @@ int NTAPI RtlQueryFeatureConfiguration_Hook(UINT32 featureId,
         case 47205210:
         // case 49221331:
         case 49402389:
-            config->enabledState = FEATURE_ENABLED_STATE_DISABLED;
+            Wh_Log(L"%u", featureId);
+            if (g_disableNewStartMenuLayout ==
+                DisableNewStartMenuLayout::forceNewLayout) {
+                config->enabledState = FEATURE_ENABLED_STATE_ENABLED;
+            } else {
+                config->enabledState = FEATURE_ENABLED_STATE_DISABLED;
+            }
             break;
     }
 
@@ -9434,13 +9447,16 @@ DisableNewStartMenuLayout GetDisableNewStartMenuLayout() {
     PCWSTR disableNewStartMenuLayoutStr =
         Wh_GetStringSetting(L"disableNewStartMenuLayout");
     DisableNewStartMenuLayout disableNewStartMenuLayout =
-        DisableNewStartMenuLayout::dontDisable;
+        DisableNewStartMenuLayout::windowsDefault;
     if (wcscmp(disableNewStartMenuLayoutStr, L"1") == 0) {
         disableNewStartMenuLayout =
             DisableNewStartMenuLayout::disableNewLayoutAndPhoneLink;
-    } else if (wcscmp(disableNewStartMenuLayoutStr, L"2") == 0) {
+    } else if (wcscmp(disableNewStartMenuLayoutStr,
+                      L"disableNewLayoutKeepPhoneLink") == 0) {
         disableNewStartMenuLayout =
             DisableNewStartMenuLayout::disableNewLayoutKeepPhoneLink;
+    } else if (wcscmp(disableNewStartMenuLayoutStr, L"forceNewLayout") == 0) {
+        disableNewStartMenuLayout = DisableNewStartMenuLayout::forceNewLayout;
     }
     Wh_FreeStringSetting(disableNewStartMenuLayoutStr);
     return disableNewStartMenuLayout;
@@ -9448,36 +9464,6 @@ DisableNewStartMenuLayout GetDisableNewStartMenuLayout() {
 
 BOOL Wh_ModInit() {
     Wh_Log(L">");
-
-    g_disableNewStartMenuLayout = GetDisableNewStartMenuLayout();
-
-    if (g_disableNewStartMenuLayout != DisableNewStartMenuLayout::dontDisable) {
-        // Only terminate if the process has been running for more than 30
-        // seconds.
-        FILETIME creationTime, exitTime, kernelTime, userTime;
-        if (GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime,
-                            &kernelTime, &userTime)) {
-            FILETIME currentTime;
-            GetSystemTimeAsFileTime(&currentTime);
-            ULARGE_INTEGER creation, current;
-            creation.LowPart = creationTime.dwLowDateTime;
-            creation.HighPart = creationTime.dwHighDateTime;
-            current.LowPart = currentTime.dwLowDateTime;
-            current.HighPart = currentTime.dwHighDateTime;
-            // 30 seconds in 100-nanosecond intervals.
-            if (current.QuadPart - creation.QuadPart > 30 * 10000000ULL) {
-                // Exit to have the new setting take effect. The process will be
-                // relaunched automatically.
-                ExitProcess(0);
-            }
-        }
-    }
-
-    g_isRedesignedStartMenu =
-        g_disableNewStartMenuLayout == DisableNewStartMenuLayout::dontDisable &&
-        IsOsFeatureEnabled(47205210).value_or(false) &&
-        IsOsFeatureEnabled(49221331).value_or(false) &&
-        IsOsFeatureEnabled(49402389).value_or(false);
 
     g_target = Target::StartMenu;
 
@@ -9502,6 +9488,32 @@ BOOL Wh_ModInit() {
             break;
     }
 
+    g_disableNewStartMenuLayout = GetDisableNewStartMenuLayout();
+
+    if (g_disableNewStartMenuLayout !=
+        DisableNewStartMenuLayout::windowsDefault) {
+        // Throttle to avoid exiting in a loop if something goes wrong.
+        WCHAR lastExitTickCountKey[64];
+        swprintf_s(lastExitTickCountKey, L"lastExitTickCount_%d",
+                   static_cast<int>(g_target));
+        DWORD lastTickCount = (DWORD)Wh_GetIntValue(lastExitTickCountKey, 0);
+        DWORD currentTickCount = GetTickCount();
+        if (currentTickCount - lastTickCount > 10 * 1000) {
+            Wh_SetIntValue(lastExitTickCountKey, currentTickCount);
+            // Exit to have the new setting take effect. The process will be
+            // relaunched automatically.
+            ExitProcess(0);
+        }
+    }
+
+    g_isRedesignedStartMenu = g_disableNewStartMenuLayout ==
+                                  DisableNewStartMenuLayout::forceNewLayout ||
+                              (g_disableNewStartMenuLayout ==
+                                   DisableNewStartMenuLayout::windowsDefault &&
+                               IsOsFeatureEnabled(47205210).value_or(false) &&
+                               IsOsFeatureEnabled(49221331).value_or(false) &&
+                               IsOsFeatureEnabled(49402389).value_or(false));
+
     HMODULE user32Module =
         LoadLibraryEx(L"user32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     if (user32Module) {
@@ -9522,8 +9534,8 @@ BOOL Wh_ModInit() {
         }
     }
 
-    if (g_target == Target::StartMenu &&
-        g_disableNewStartMenuLayout != DisableNewStartMenuLayout::dontDisable) {
+    if (g_disableNewStartMenuLayout !=
+        DisableNewStartMenuLayout::windowsDefault) {
         HMODULE hNtDll = LoadLibraryW(L"ntdll.dll");
         RtlQueryFeatureConfiguration_t pRtlQueryFeatureConfiguration =
             (RtlQueryFeatureConfiguration_t)GetProcAddress(
@@ -9558,14 +9570,14 @@ void Wh_ModAfterInit() {
 void Wh_ModUninit() {
     Wh_Log(L">");
 
-    if (g_target == Target::StartMenu) {
-        if (g_disableNewStartMenuLayout !=
-            DisableNewStartMenuLayout::dontDisable) {
-            // Exit to have the new setting take effect. The process will be
-            // relaunched automatically.
-            ExitProcess(0);
-        }
+    if (g_disableNewStartMenuLayout !=
+        DisableNewStartMenuLayout::windowsDefault) {
+        // Exit to have the new setting take effect. The process will be
+        // relaunched automatically.
+        ExitProcess(0);
+    }
 
+    if (g_target == Target::StartMenu) {
         StopStatsTimer();
     }
 
@@ -9604,12 +9616,10 @@ void Wh_ModUninit() {
 void Wh_ModSettingsChanged() {
     Wh_Log(L">");
 
-    if (g_target == Target::StartMenu) {
-        if (GetDisableNewStartMenuLayout() != g_disableNewStartMenuLayout) {
-            // Exit to have the new setting take effect. The process will be
-            // relaunched automatically.
-            ExitProcess(0);
-        }
+    if (GetDisableNewStartMenuLayout() != g_disableNewStartMenuLayout) {
+        // Exit to have the new setting take effect. The process will be
+        // relaunched automatically.
+        ExitProcess(0);
     }
 
     if (g_visualTreeWatcher) {
