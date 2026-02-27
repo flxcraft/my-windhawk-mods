@@ -2715,7 +2715,6 @@ bool Init(HMODULE module) {
 
     void** ppCxaThrow = FindImportPtr(module, "libc++.dll", "__cxa_throw");
     if (!ppCxaThrow) {
-        wsprintf(errorMsg, L"No __cxa_throw");
         return false;
     }
 
