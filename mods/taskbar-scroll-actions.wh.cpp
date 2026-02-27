@@ -2,7 +2,7 @@
 // @id              taskbar-scroll-actions
 // @name            Taskbar Scroll Actions
 // @description     Assign actions for scrolling over the taskbar, including virtual desktop switching, brightness control, and microphone volume control
-// @version         1.1
+// @version         1.2
 // @author          m417z
 // @github          https://github.com/m417z
 // @twitter         https://twitter.com/m417z
@@ -1175,13 +1175,13 @@ void InvokeScrollAction(HWND hWnd,
             // It's too soon, ignore this scroll event.
             clicks = 0;
 
-            // Reset reminder too.
+            // Reset remainder too.
             delta = 0;
         } else if (clicks < -1 || clicks > 1) {
             // Throttle to a single action at a time.
             clicks = clicks > 0 ? 1 : -1;
 
-            // Reset reminder if going too fast.
+            // Reset remainder if going too fast.
             delta = 0;
         }
     }
