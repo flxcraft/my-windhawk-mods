@@ -193,7 +193,11 @@ bool IsCursorInActivationRegion(HWND hWnd, POINT pt) {
     int cursorOffset;
     if (isHorizontal) {
         taskbarLength = rc.right - rc.left;
-        cursorOffset = pt.x - rc.left;
+        if (GetWindowLong(hWnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) {
+            cursorOffset = rc.right - pt.x;
+        } else {
+            cursorOffset = pt.x - rc.left;
+        }
     } else {
         taskbarLength = rc.bottom - rc.top;
         cursorOffset = pt.y - rc.top;
