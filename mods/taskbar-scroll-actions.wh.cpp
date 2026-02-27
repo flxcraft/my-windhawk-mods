@@ -1151,7 +1151,9 @@ void InvokeScrollAction(HWND hWnd,
     const auto& entry = g_settings.scrollActions[entryIndex];
 
     if (entryIndex != g_lastScrollActionIndex) {
+        g_lastScrollTime = 0;
         g_lastScrollDeltaRemainder = 0;
+        g_lastActionTime = 0;
         g_lastScrollActionIndex = entryIndex;
     }
 
